@@ -200,51 +200,67 @@ async def queue_handler(client, message):
         return
     
     try:
-        # Get all active torrents from qBittorrent
+        # Get all torrents from qBittorrent
         all_torrents = qb.torrents_info()
-        active_torrents = {t.hash: t for t in all_torrents if t.hash in ACTIVE_TASKS}
+        torrent_dict = {t.hash: t for t in all_torrents}
         
-        if not active_torrents:
-            await message.reply("📭 <b>Queue is empty</b>\n\n<i>No active downloads</i>", parse_mode=enums.ParseMode.HTML)
-            return
-        
-        queue_text = f"📋 <b>Active Downloads ({len(active_torrents)})</b>\n\n"
+        queue_text = f"📋 <b>Active Tasks ({len(ACTIVE_TASKS)})</b>\n\n"
         
         from progress import get_readable_file_size, get_readable_time
         
-        for idx, (t_hash, torrent) in enumerate(active_torrents.items(), 1):
-            progress = torrent.progress * 100
-            task_info = ACTIVE_TASKS.get(t_hash, {})
-            name = task_info.get("name", torrent.name)[:40]
+        for idx, (t_hash, task_info) in enumerate(ACTIVE_TASKS.items(), 1):
+            name = task_info.get("name", "Download")[:40]
             
-            # Status icon based on state
-            if torrent.state in ["downloading", "queuedDL", "stalledDL"]:
-                status_icon = "⏳"
-                status_text = "Downloading"
-            elif torrent.state in ["uploading", "stalledUP", "queuedUP"]:
-                status_icon = "📤"
-                status_text = "Uploading to Telegram"
+            # Check if torrent exists in qBittorrent
+            torrent = torrent_dict.get(t_hash)
+            
+            if torrent:
+                # Determine state from qBittorrent
+                if torrent.state in ["downloading", "queuedDL", "stalledDL", "metaDL"]:
+                    status_icon = "⏳"
+                    status_text = "Downloading"
+                    progress = torrent.progress * 100
+                    
+                    queue_text += f"{status_icon} <b>Task #{idx}: {status_text}</b>\n"
+                    queue_text += f"📝 {name}...\n"
+                    queue_text += f"💾 {get_readable_file_size(torrent.downloaded)} / {get_readable_file_size(torrent.size)}\n"
+                    queue_text += f"📊 Progress: {progress:.1f}%\n"
+                    
+                    speed_str = get_readable_file_size(torrent.dlspeed) + "/s"
+                    eta = torrent.eta if torrent.eta > 0 else 0
+                    eta_str = get_readable_time(eta) if eta > 0 else "Unknown"
+                    queue_text += f"⚡ Speed: {speed_str} | ETA: {eta_str}\n"
+                    queue_text += f"🌱 Seeds: {torrent.num_seeds} | Peers: {torrent.num_leechs}\n"
+                    
+                elif torrent.state in ["uploading", "stalledUP", "queuedUP", "pausedUP"]:
+                    # Torrent is seeding, but we're uploading to Telegram
+                    status_icon = "📤"
+                    status_text = "Uploading to Telegram"
+                    progress = torrent.progress * 100
+                    
+                    queue_text += f"{status_icon} <b>Task #{idx}: {status_text}</b>\n"
+                    queue_text += f"📝 {name}...\n"
+                    queue_text += f"💾 Size: {get_readable_file_size(torrent.size)}\n"
+                    queue_text += f"📊 Download: {progress:.1f}% Complete\n"
+                    queue_text += f"<i>Uploading files to Telegram...</i>\n"
+                else:
+                    status_icon = "⏸️"
+                    status_text = torrent.state
+                    queue_text += f"{status_icon} <b>Task #{idx}: {status_text}</b>\n"
+                    queue_text += f"📝 {name}...\n"
             else:
-                status_icon = "⏸️"
-                status_text = torrent.state
-            
-            queue_text += f"{status_icon} <b>Download #{idx}</b>\n"
-            queue_text += f"📝 {name}...\n"
-            queue_text += f"💾 {get_readable_file_size(torrent.downloaded)} / {get_readable_file_size(torrent.size)}\n"
-            queue_text += f"📊 Progress: {progress:.1f}%\n"
-            
-            if torrent.state in ["downloading", "queuedDL"]:
-                speed_str = get_readable_file_size(torrent.dlspeed) + "/s"
-                eta = torrent.eta if torrent.eta > 0 else 0
-                eta_str = get_readable_time(eta) if eta > 0 else "Unknown"
-                queue_text += f"⚡ Speed: {speed_str} | ETA: {eta_str}\n"
-                queue_text += f"🌱 Seeds: {torrent.num_seeds} | Peers: {torrent.num_leechs}\n"
+                # Torrent not in qBittorrent anymore - likely in upload phase
+                status_icon = "📤"
+                status_text = "Uploading"
+                queue_text += f"{status_icon} <b>Task #{idx}: {status_text}</b>\n"
+                queue_text += f"📝 {name}...\n"
+                queue_text += f"<i>Files being uploaded to Telegram...</i>\n"
             
             queue_text += "\n"
         
         # Add individual cancel buttons for each download
         buttons = []
-        for t_hash, task_info in active_torrents.items():
+        for t_hash, task_info in ACTIVE_TASKS.items():
             name = task_info.get("name", "Download")[:20]
             buttons.append([InlineKeyboardButton(f"❌ Cancel: {name}...", callback_data=f"cancel_{t_hash}")])
         
