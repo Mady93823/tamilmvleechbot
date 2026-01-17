@@ -33,14 +33,22 @@ IS_SHUTTING_DOWN = False
 ACTIVE_TASKS = [] # List of active Task IDs or Objects
 
 # --- qBittorrent Client ---
-try:
-    qb = qbClient(host=QB_HOST, port=QB_PORT)
-    # No auth needed due to local config
-    qb.auth_log_in()
-    logger.info("Connected to qBittorrent!")
-except Exception as e:
-    logger.error(f"Failed to connect to qBittorrent: {e}")
-    sys.exit(1)
+# --- qBittorrent Client ---
+def connect_qb():
+    retry_count = 0
+    while True:
+        try:
+            qb = qbClient(host=QB_HOST, port=QB_PORT)
+            qb.auth_log_in()
+            logger.info("Connected to qBittorrent!")
+            return qb
+        except Exception as e:
+            retry_count += 1
+            wait_time = min(retry_count * 2, 30) # Exponential backoff capped at 30s
+            logger.error(f"Failed to connect to qBittorrent: {e}. Retrying in {wait_time}s...")
+            time.sleep(wait_time)
+
+qb = connect_qb()
 
 # --- Pyrogram Client ---
 # Rule: "Handle Error 429". Sleep_threshold will auto-sleep on FloodWait < 60s
