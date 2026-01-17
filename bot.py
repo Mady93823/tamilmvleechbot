@@ -13,6 +13,7 @@ from pyrogram.errors import MessageNotModified
 from qbittorrentapi import Client as qbClient
 import settings
 import progress
+import thumb_utils
 
 # Load Config
 load_dotenv('config.env')
@@ -113,13 +114,25 @@ async def settings_handler(client, message):
     if not await check_permissions(message):
         return
 
+    user_id = message.from_user.id
     current_size = settings.get_setting("max_file_size") / (1024**3) # GB
     current_mode = settings.get_setting("upload_mode")
+    has_thumb = await thumb_utils.get_user_thumbnail(user_id) is not None
     
     text = (f"⚙️ <b>Settings</b>\n\n"
             f"<b>Max File Size:</b> {current_size}GB\n"
-            f"<b>Upload Mode:</b> {current_mode}")
+            f"<b>Upload Mode:</b> {current_mode}\n"
+            f"<b>Thumbnail:</b> {'✅ Set' if has_thumb else '❌ Not Set'}")
             
+    thumb_buttons = []
+    if has_thumb:
+        thumb_buttons = [
+            InlineKeyboardButton("👁️ View Thumb", callback_data="view_thumb"),
+            InlineKeyboardButton("🗑️ Delete Thumb", callback_data="del_thumb")
+        ]
+    else:
+        thumb_buttons = [InlineKeyboardButton("📷 Upload Thumb", callback_data="upload_thumb")]
+    
     buttons = InlineKeyboardMarkup([
         [
             InlineKeyboardButton(f"Set 2GB {'✅' if current_size==2 else ''}", callback_data="set_size_2"),
@@ -129,6 +142,7 @@ async def settings_handler(client, message):
             InlineKeyboardButton(f"Mode: Doc {'✅' if current_mode=='document' else ''}", callback_data="set_mode_doc"),
             InlineKeyboardButton(f"Mode: Video {'✅' if current_mode=='video' else ''}", callback_data="set_mode_vid")
         ],
+        thumb_buttons,
         [InlineKeyboardButton("✖️ Close", callback_data="close")]
     ])
     
@@ -140,6 +154,32 @@ async def callback_handler(client, callback):
     
     if data == "close":
         await callback.message.delete()
+        return
+    
+    # Thumbnail handlers
+    user_id = callback.from_user.id
+    
+    if data == "upload_thumb":
+        await callback.message.edit("📷 <b>Send me a photo to set as thumbnail</b>\n\n<i>Timeout: 60 seconds</i>", parse_mode=enums.ParseMode.HTML)
+        try:
+            photo_msg = await app.listen(callback.message.chat.id, filters=filters.photo, timeout=60)
+            file_path = await photo_msg.download()
+            await thumb_utils.set_user_thumbnail(user_id, file_path)
+            await callback.message.edit("✅ <b>Thumbnail set successfully!</b>", parse_mode=enums.ParseMode.HTML)
+        except asyncio.TimeoutError:
+            await callback.message.edit("⏱️ <b>Timeout!</b> Thumbnail upload cancelled.", parse_mode=enums.ParseMode.HTML)
+        return
+    
+    if data == "view_thumb":
+        thumb_path = await thumb_utils.get_user_thumbnail(user_id)
+        if thumb_path:
+            await callback.message.reply_photo(thumb_path, caption="📷 <b>Your Current Thumbnail</b>", parse_mode=enums.ParseMode.HTML)
+        await callback.answer()
+        return
+    
+    if data == "del_thumb":
+        await thumb_utils.delete_user_thumbnail(user_id)
+        await callback.answer("🗑️ Thumbnail deleted!")
         return
         
     if data.startswith("cancel_"):
@@ -324,6 +364,8 @@ async def magnet_handler(client, message):
         # Upload each file
         mode = settings.get_setting("upload_mode")
         uploaded_count = 0
+        user_id = message.from_user.id
+        user_thumb = await thumb_utils.get_user_thumbnail(user_id)
         
         for idx, file_to_upload in enumerate(files_to_upload, 1):
             try:
@@ -365,6 +407,7 @@ async def magnet_handler(client, message):
                     await client.send_document(
                         chat_id=message.chat.id,
                         document=file_to_upload,
+                        thumb=user_thumb,
                         caption=f"✅ {file_name}",
                         progress=progress_callback
                     )
@@ -372,6 +415,7 @@ async def magnet_handler(client, message):
                     await client.send_video(
                         chat_id=message.chat.id,
                         video=file_to_upload,
+                        thumb=user_thumb,
                         caption=f"✅ {file_name}",
                         progress=progress_callback
                     )

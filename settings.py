@@ -7,7 +7,8 @@ SETTINGS_FILE = "settings.json"
 DEFAULT_SETTINGS = {
     "max_file_size": 2 * 1024 * 1024 * 1024,  # 2GB in bytes
     "upload_mode": "document",
-    "sudo_users": [] 
+    "sudo_users": [],
+    "user_thumbnails": {}  # {user_id: "Thumbnails/{user_id}.jpg"}
 }
 
 # In-memory cache to reduce disk reads during high load
