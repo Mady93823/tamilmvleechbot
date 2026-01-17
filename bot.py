@@ -489,101 +489,34 @@ async def callback_handler(client, callback):
     await callback.message.edit(text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
     await callback.answer("Settings Updated!")
 
-@app.on_message(filters.regex(r"^magnet:\?xt=urn:btih:[a-zA-Z0-9]*"))
-async def magnet_handler(client, message):
-    if IS_SHUTTING_DOWN:
-        await message.reply("⚠️ Bot is restarting. Please wait.")
-        return
-
-    if not await check_permissions(message):
-        return
-    
-    # Check queue limit
-    if len(ACTIVE_TASKS) >= MAX_CONCURRENT_DOWNLOADS:
-        await message.reply(
-            f"⚠️ <b>Queue is full!</b>\n\n"
-            f"Currently processing {len(ACTIVE_TASKS)}/{MAX_CONCURRENT_DOWNLOADS} downloads.\n"
-            f"Your magnet link will be added after one finishes.\n\n"
-            f"<i>Use /queue to see active downloads or /cancel to free a slot</i>",
-            parse_mode=enums.ParseMode.HTML
-        )
-        return
-
-    magnet_link = message.text.strip()
-    status_msg = await message.reply("🔄 checking magnet link...")
-    
-    # 1. Add Torrent
-    ADD_TIME = time.time()
-    try:
-        # qBittorrent returns "Ok." or similar string on success
-        qb.torrents_add(urls=magnet_link, save_path=os.path.abspath(DOWNLOAD_DIR))
-        # Wait for metadata to be fetched
-        await asyncio.sleep(2)
-        
-        # Get torrent info with timeout
-        torrents = qb.torrents_info(status_filter="downloading")
-        if not torrents:
-            # Wait up to 120 seconds for metadata
-            while True:
-                await asyncio.sleep(3)
-                torrents = qb.torrents_info(status_filter="downloading")
-                if torrents:
-                    break
-                if time.time() - ADD_TIME >= 120:
-                    await status_msg.edit("❌ Failed to add torrent or metadata taking too long (120s timeout).")
-                    return
-            
-        # For simplicity, assume the first one found is the one (Limitation: don't run multiple parallel yet)
-        torrent = torrents[0] 
-        t_hash = torrent.hash
-        
-        # Check size limit
-        # Rule: "Not download oversize file"
-        if torrent.total_size > settings.get_setting("max_file_size"):
-             qb.torrents_delete(torrent_hashes=t_hash, delete_files=True)
-             await status_msg.edit(f"❌ File too big! Limit is {settings.get_setting('max_file_size')/(1024**3)}GB.")
-             return
-
-    except Exception as e:
-        await status_msg.edit(f"❌ Error adding torrent: {e}")
-        return
-
-    # Track this download with metadata
-    ACTIVE_TASKS[t_hash] = {
-        "user_id": message.from_user.id,
-        "chat_id": message.chat.id,
-        "status_msg": status_msg,
-        "name": torrent.name
-    }
+async def process_download(t_hash, message, status_msg):
+    """Process download independently (async task)"""
     start_time = time.time()
     
     try:
         while True:
             if IS_SHUTTING_DOWN:
-                # Rule: "Graceful Shutdown... Finish current active downloads"
-                # We continue the loop!
-                pass
-                
-            if t_hash not in ACTIVE_TASKS:
-                return
-
+                break
+            
             try:
                 info_list = qb.torrents_info(torrent_hashes=t_hash)
                 if not info_list:
-                     # Torrent removed externally or cancelled
-                     if t_hash in ACTIVE_TASKS:
-                         del ACTIVE_TASKS[t_hash]
-                     return
+                    if t_hash in ACTIVE_TASKS:
+                        del ACTIVE_TASKS[t_hash]
+                    return
                 info = info_list[0]
             except Exception:
-                return
+                await asyncio.sleep(3)
+                continue
             
             cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_{t_hash}")]])
-
-            if info.state in ["metaDL", "allocating", "checkingUP", "checkingDL"]:
-                logger.info(f"[{t_hash[:6]}...] State: {info.state} | Seeds: {info.num_seeds} | Peers: {info.num_leechs} | DL Speed: {info.dlspeed/1024:.2f} KB/s")
+            
+            if info.state in ["metaDL", "checkingResumeData"]:
                 try:
-                    await status_msg.edit(f"🔄 Preparing: {info.state}...\nSeeds: {info.num_seeds} | Peers: {info.num_leechs}", reply_markup=cancel_btn)
+                    await status_msg.edit(
+                        f"🔄 Preparing: {info.state}...\nSeeds: {info.num_seeds} | Peers: {info.num_leechs}",
+                        reply_markup=cancel_btn
+                    )
                 except MessageNotModified:
                     pass
                 await asyncio.sleep(3)
@@ -598,10 +531,9 @@ async def magnet_handler(client, message):
                     f"⬇️ <b>Downloading: {info.name}</b>",
                     reply_markup=cancel_btn
                 )
-                await asyncio.sleep(5) # Rule: "Respect Speed Limits" - 5s wait
+                await asyncio.sleep(5)
                 
             elif info.state in ["uploading", "stalledUP", "queuedUP", "pausedUP"]:
-                # Finished downloading
                 break
                 
             elif info.state in ["error", "missingFiles"]:
@@ -610,21 +542,18 @@ async def magnet_handler(client, message):
                     del ACTIVE_TASKS[t_hash]
                 return
 
-        # 3. Upload to Telegram
+        # Upload to Telegram
         await status_msg.edit("✅ Download Complete. Preparing upload...")
         
-        # Import rename utilities
         from rename_utils import rename_for_upload
         from natsort import natsorted
         
-        # Find all files to upload
         content_path = info.content_path
         files_to_upload = []
         
         if os.path.isfile(content_path):
             files_to_upload.append(content_path)
         else:
-            # Walk directory and collect all files
             for root, dirs, files in sorted(os.walk(content_path)):
                 for file in natsorted(files):
                     file_path = os.path.join(root, file)
@@ -636,40 +565,32 @@ async def magnet_handler(client, message):
                 del ACTIVE_TASKS[t_hash]
             return
         
-        # Warn if too many files
         if len(files_to_upload) > 50:
-            await status_msg.edit(f"⚠️ Found {len(files_to_upload)} files. This may take a while and could trigger rate limits. Continue? (Auto-continuing in 10s)")
+            await status_msg.edit(f"⚠️ Found {len(files_to_upload)} files. This may take a while. Auto-continuing in 10s...")
             await asyncio.sleep(10)
         
-        # Upload each file
         mode = settings.get_setting("upload_mode")
         uploaded_count = 0
         user_id = message.from_user.id
         user_thumb = await thumb_utils.get_user_thumbnail(user_id)
         
-        # Get upload channels (default to sender's chat if none configured)
         upload_channels = channel_utils.get_channels()
         if not upload_channels:
             upload_channels = [message.chat.id]
         
-        # Warn if too many total uploads
         total_uploads = len(files_to_upload) * len(upload_channels)
         if total_uploads > 100:
             await status_msg.edit(
-                f"⚠️ <b>Large upload detected!</b>\n\n"
-                f"{len(files_to_upload)} files × {len(upload_channels)} channels = {total_uploads} uploads\n\n"
-                f"This will take a while. Auto-continuing in 10 seconds...",
+                f"⚠️ <b>Large upload!</b>\n\n{len(files_to_upload)} files × {len(upload_channels)} channels = {total_uploads} uploads\n\nAuto-continuing in 10s...",
                 parse_mode=enums.ParseMode.HTML
             )
             await asyncio.sleep(10)
         
         for idx, file_to_upload in enumerate(files_to_upload, 1):
             try:
-                # Skip if cancelled
                 if t_hash not in ACTIVE_TASKS:
                     return
                 
-                # Clean filename
                 new_path = rename_for_upload(file_to_upload)
                 if new_path != file_to_upload and not os.path.exists(new_path):
                     os.rename(file_to_upload, new_path)
@@ -678,18 +599,15 @@ async def magnet_handler(client, message):
                 file_name = os.path.basename(file_to_upload)
                 file_size = os.path.getsize(file_to_upload)
                 
-                # Skip zero-byte files
                 if file_size == 0:
                     logger.warning(f"Skipping zero-byte file: {file_name}")
                     continue
                 
-                # Update status every 3 files to avoid spam
-                if idx % 3 == 1:
-                    await status_msg.edit(f"📤 Uploading {idx}/{len(files_to_upload)}: {file_name}")
+                if idx % 3 == 1 or len(files_to_upload) == 1:
+                    await status_msg.edit(f"📤 Uploading {idx}/{len(files_to_upload)}: {file_name[:30]}...")
                 
                 up_start = time.time()
                 
-
                 async def progress_callback(current, total):
                     try:
                         await progress.progress_for_pyrogram(
@@ -699,31 +617,26 @@ async def magnet_handler(client, message):
                     except Exception:
                         pass
 
-                # Upload to all configured channels
                 for channel_idx, channel_id in enumerate(upload_channels, 1):
                     try:
-                        # Convert string channel ID to int
                         channel_id = int(channel_id) if isinstance(channel_id, str) else channel_id
                         
-                        # Update status to show channel progress (if multiple channels)
                         if len(upload_channels) > 1:
                             await status_msg.edit(
-                                f"📤 File {idx}/{len(files_to_upload)} → Channel {channel_idx}/{len(upload_channels)}\n"
-                                f"{file_name[:40]}...",
+                                f"📤 File {idx}/{len(files_to_upload)} → Channel {channel_idx}/{len(upload_channels)}\n{file_name[:40]}...",
                                 parse_mode=enums.ParseMode.HTML
                             )
                         
-                        # Upload based on mode
                         if mode == "document":
-                            await client.send_document(
+                            await app.send_document(
                                 chat_id=channel_id,
                                 document=file_to_upload,
                                 thumb=user_thumb,
                                 caption=f"✅ {file_name}",
-                                progress=progress_callback if channel_idx == 1 else None  # Progress only on first channel
+                                progress=progress_callback if channel_idx == 1 else None
                             )
                         else:
-                            await client.send_video(
+                            await app.send_video(
                                 chat_id=channel_id,
                                 video=file_to_upload,
                                 thumb=user_thumb,
@@ -731,7 +644,6 @@ async def magnet_handler(client, message):
                                 progress=progress_callback if channel_idx == 1 else None
                             )
                         
-                        # Rate limit between channels (2s delay)
                         if channel_idx < len(upload_channels):
                             await asyncio.sleep(2)
                     
@@ -740,8 +652,6 @@ async def magnet_handler(client, message):
                         continue
                 
                 uploaded_count += 1
-                
-                #  Rate limiting: 1s between files, 2s every 10 files
                 await asyncio.sleep(1)
                 if uploaded_count % 10 == 0:
                     logger.info(f"Rate limit pause after {uploaded_count} files")
@@ -751,10 +661,9 @@ async def magnet_handler(client, message):
                 logger.error(f"Failed to upload {file_to_upload}: {e}")
                 continue
         
-        # Final status with completion notification
         from progress import get_readable_file_size
-        total_size_uploaded = sum(os.path.getsize(f) for f in files_to_upload if os.path.exists(f))
-        size_str = get_readable_file_size(total_size_uploaded)
+        total_size = sum(os.path.getsize(f) for f in files_to_upload if os.path.exists(f))
+        size_str = get_readable_file_size(total_size)
         
         completion_text = (
             f"✅ <b>Upload Complete!</b>\n\n"
@@ -766,7 +675,6 @@ async def magnet_handler(client, message):
         await status_msg.edit(completion_text, parse_mode=enums.ParseMode.HTML)
     
     finally:
-        # CRITICAL: Delete downloaded files explicitly
         try:
             info_list = qb.torrents_info(torrent_hashes=t_hash)
             if info_list:
@@ -781,14 +689,12 @@ async def magnet_handler(client, message):
         except Exception as e:
             logger.error(f"File cleanup error: {e}")
         
-        # Clean qBittorrent temp files from downloads directory
         try:
             from fs_utils import clean_unwanted
             await clean_unwanted(DOWNLOAD_DIR)
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
         
-        # Remove torrent from qBittorrent (files already deleted above)
         try:
             qb.torrents_delete(torrent_hashes=t_hash, delete_files=False)
         except Exception:
@@ -796,23 +702,93 @@ async def magnet_handler(client, message):
             
         if t_hash in ACTIVE_TASKS:
             del ACTIVE_TASKS[t_hash]
-        
-        # Rule: Graceful Shutdown check
-        if IS_SHUTTING_DOWN and not ACTIVE_TASKS:
-             logger.info("All tasks finished. Shutdown complete.")
-             cleanup_pid()
-             sys.exit(0)
 
-# --- Start Bot ---
+@app.on_message(filters.regex(r"^magnet:\?xt=urn:btih:[a-zA-Z0-9]*"))
+async def magnet_handler(client, message):
+    """Non-blocking magnet handler - spawns async tasks"""
+    if IS_SHUTTING_DOWN:
+        await message.reply("⚠️ Bot is restarting. Please wait.")
+        return
+
+    if not await check_permissions(message):
+        return
+    
+    if len(ACTIVE_TASKS) >= MAX_CONCURRENT_DOWNLOADS:
+        await message.reply(
+            f"⚠️ <b>Queue is full!</b>\n\nCurrently processing {len(ACTIVE_TASKS)}/{MAX_CONCURRENT_DOWNLOADS} downloads.\n"
+            f"Your magnet will be added after one finishes.\n\n<i>Use /queue or /cancel</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
+
+    magnet_link = message.text.strip()
+    status_msg = await message.reply("🔄 Adding magnet...")
+
+    try:
+        qb.torrents_add(urls=magnet_link, save_path=DOWNLOAD_DIR)
+        ADD_TIME = time.time()
+        
+        await asyncio.sleep(2)
+        
+        torrents = qb.torrents_info(status_filter="downloading")
+        if not torrents:
+            while True:
+                await asyncio.sleep(3)
+                torrents = qb.torrents_info(status_filter="downloading")
+                if torrents:
+                    break
+                if time.time() - ADD_TIME >= 120:
+                    await status_msg.edit("❌ Failed to add torrent or metadata timeout (120s).")
+                    return
+            
+        torrent = torrents[0] 
+        t_hash = torrent.hash
+        
+        max_file_size = settings.get_setting("max_file_size")
+        torrent_size = torrent.total_size
+        
+        if torrent_size > max_file_size:
+            qb.torrents_delete(torrent_hashes=t_hash, delete_files=True)
+            from progress import get_readable_file_size
+            await status_msg.edit(
+                f"❌ <b>File too big!</b>\n\nSize: {get_readable_file_size(torrent_size)}\n"
+                f"Limit: {get_readable_file_size(max_file_size)}\n\n<i>Change limit in /settings</i>",
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+
+    except Exception as e:
+        await status_msg.edit(f"❌ Error adding torrent: {e}")
+        return
+    
+    # Track download
+    ACTIVE_TASKS[t_hash] = {
+        "user_id": message.from_user.id,
+        "chat_id": message.chat.id,
+        "status_msg": status_msg,
+        "name": torrent.name
+    }
+    
+    # Spawn async task (NON-BLOCKING!)
+    asyncio.create_task(process_download(t_hash, message, status_msg))
+    
+    # Return immediately - can handle next magnet!
+    logger.info(f"Spawned download task for: {torrent.name} ({t_hash})")
+
+# --- Shutdown & Signal Handling ---
+def cleanup_pid():
+    try:
+        if os.path.exists(PID_FILE):
+            os.remove(PID_FILE)
+    except:
+        pass
 
 if __name__ == "__main__":
-    # PID Check Rule: "Kill Old Processes"
-    if os.path.exists(PID_FILE):
-        try:
+    # Write PID
+    try:
+        if os.path.exists(PID_FILE):
             with open(PID_FILE, "r") as f:
                 old_pid = int(f.read())
-            # For Windows, we might want to tell usage to kill it manually or do it here
-            logger.warning(f"Previous instance with PID {old_pid} found.")
             # Optional: os.kill(old_pid, signal.SIGTERM)
         except:
             pass
