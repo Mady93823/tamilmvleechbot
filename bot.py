@@ -741,27 +741,44 @@ async def magnet_handler(client, message):
     status_msg = await message.reply("🔄 Adding magnet...")
 
     try:
+        # Get list of torrents BEFORE adding
+        before_hashes = {t.hash for t in qb.torrents_info()}
+        
+        # Add torrent
         qb.torrents_add(urls=magnet_link, save_path=DOWNLOAD_DIR)
         ADD_TIME = time.time()
         
         await asyncio.sleep(2)
         
-        torrents = qb.torrents_info(status_filter="downloading")
-        if not torrents:
-            while True:
-                await asyncio.sleep(3)
-                torrents = qb.torrents_info(status_filter="downloading")
-                if torrents:
+        # Find the NEW torrent by comparing hashes
+        new_torrent = None
+        max_retries = 40  # 40 * 3s = 120s timeout
+        
+        for attempt in range(max_retries):
+            current_torrents = qb.torrents_info()
+            for torrent in current_torrents:
+                if torrent.hash not in before_hashes:
+                    new_torrent = torrent
                     break
-                if time.time() - ADD_TIME >= 120:
-                    await status_msg.edit("❌ Failed to add torrent or metadata timeout (120s).")
-                    return
             
-        torrent = torrents[0] 
-        t_hash = torrent.hash
+            if new_torrent:
+                break
+            
+            await asyncio.sleep(3)
+        
+        if not new_torrent:
+            await status_msg.edit("❌ Failed to add torrent or metadata timeout (120s).")
+            return
+        
+        t_hash = new_torrent.hash
+        
+        # Check for duplicate
+        if t_hash in ACTIVE_TASKS:
+            await status_msg.edit("⚠️ <b>Duplicate detected!</b>\n\n<i>This torrent is already downloading</i>", parse_mode=enums.ParseMode.HTML)
+            return
         
         max_file_size = settings.get_setting("max_file_size")
-        torrent_size = torrent.total_size
+        torrent_size = new_torrent.total_size
         
         if torrent_size > max_file_size:
             qb.torrents_delete(torrent_hashes=t_hash, delete_files=True)
@@ -782,14 +799,14 @@ async def magnet_handler(client, message):
         "user_id": message.from_user.id,
         "chat_id": message.chat.id,
         "status_msg": status_msg,
-        "name": torrent.name
+        "name": new_torrent.name
     }
     
     # Spawn async task (NON-BLOCKING!)
     asyncio.create_task(process_download(t_hash, message, status_msg))
     
     # Return immediately - can handle next magnet!
-    logger.info(f"Spawned download task for: {torrent.name} ({t_hash})")
+    logger.info(f"Spawned download task for: {new_torrent.name} ({t_hash})")
 
 # --- Shutdown & Signal Handling ---
 def cleanup_pid():
