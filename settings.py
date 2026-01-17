@@ -18,6 +18,11 @@ def load_settings():
     global _settings_cache
     if _settings_cache:
         return _settings_cache
+    
+    # Fix: If settings.json is a directory, remove it
+    if os.path.exists(SETTINGS_FILE) and os.path.isdir(SETTINGS_FILE):
+        import shutil
+        shutil.rmtree(SETTINGS_FILE)
         
     if not os.path.exists(SETTINGS_FILE):
         save_settings(DEFAULT_SETTINGS)
