@@ -4,11 +4,12 @@
 mkdir -p /root/.config/qBittorrent
 
 # Move our custom config to the correct location for qBittorrent
-cp /app/qbit_config/qBittorrent.conf /root/.config/qBittorrent/qBittorrent.conf
+# Source matches the folder structure: qbit_config/qBittorrent/qBittorrent.conf
+cp /app/qbit_config/qBittorrent/qBittorrent.conf /root/.config/qBittorrent/qBittorrent.conf
 
 # Start qBittorrent in background
 echo "🚀 Starting qBittorrent..."
-qbittorrent-nox -d --webui-port=8090
+qbittorrent-nox -d --webui-port=8090 --confirm-legal-notice
 
 # Wait for it to start
 sleep 5
