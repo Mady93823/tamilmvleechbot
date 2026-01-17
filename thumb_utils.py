@@ -2,12 +2,14 @@ import os
 import settings
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiofiles.os import path as aiopath
 
 async def get_user_thumbnail(user_id):
     """Get thumbnail path for user if exists."""
     thumbs = settings.get_setting("user_thumbnails")
     thumb_path = thumbs.get(str(user_id))
-    if thumb_path and os.path.exists(thumb_path):
+    # CRITICAL FIX: Use async file check (KPS pattern)
+    if thumb_path and await aiopath.exists(thumb_path):
         return thumb_path
     return None
 

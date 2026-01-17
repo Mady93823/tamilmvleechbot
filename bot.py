@@ -423,6 +423,15 @@ async def magnet_handler(client, message):
                 
                 uploaded_count += 1
                 
+                # CRITICAL FIX: Delete file IMMEDIATELY after successful upload (KPS pattern)
+                # This prevents qBittorrent from deleting files we haven't uploaded yet
+                try:
+                    if os.path.exists(file_to_upload):
+                        os.remove(file_to_upload)
+                        logger.info(f"Deleted uploaded file: {file_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete {file_name}: {e}")
+                
                 #  Rate limiting: 1s between files, 2s every 10 files
                 await asyncio.sleep(1)
                 if uploaded_count % 10 == 0:
@@ -437,8 +446,19 @@ async def magnet_handler(client, message):
         await status_msg.edit(f"✅ <b>Upload Complete!</b>\n{uploaded_count} file(s) uploaded.")
     
     finally:
-        # Cleanup
-        qb.torrents_delete(torrent_hashes=t_hash, delete_files=True)
+        # Clean qBittorrent temp files
+        try:
+            from fs_utils import clean_unwanted
+            await clean_unwanted(DOWNLOAD_DIR)
+        except Exception as e:
+            logger.error(f"Cleanup error: {e}")
+        
+        # Remove torrent from qBittorrent (files already deleted in upload loop)
+        try:
+            qb.torrents_delete(torrent_hashes=t_hash, delete_files=False)
+        except Exception:
+            pass
+            
         if t_hash in ACTIVE_TASKS:
             ACTIVE_TASKS.remove(t_hash)
         

@@ -5,16 +5,17 @@ from os import path as ospath
 def clean_filename(filename):
     """
     Clean filename by removing unwanted patterns.
-    - www.1tamilmv.(any extension)
-    - Brackets [], ()
-    - Excessive hyphens and spaces
+    Uses KPS bot patterns for robustness.
     """
-    # Remove www.1tamilmv with any extension (case insensitive)
-    filename = re.sub(r'www\.1tamilmv\.\w+', '', filename, flags=re.IGNORECASE)
+    # Remove www.ANYTHING (case insensitive) - KPS pattern
+    filename = re.sub(r'www\S+', '', filename, flags=re.IGNORECASE)
     
     # Remove [tags] and (metadata)
     filename = re.sub(r'\[.*?\]', '', filename)
     filename = re.sub(r'\(.*?\)', '', filename)
+    
+    # Clean leading/trailing dashes and multiple dashes - KPS pattern
+    filename = re.sub(r'(^\s*-\s*|(\s*-\s*){2,})', '', filename)
     
     # Replace multiple consecutive hyphens/underscores with space
     filename = re.sub(r'[-_]+', ' ', filename)
