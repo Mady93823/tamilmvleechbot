@@ -8,7 +8,7 @@ config.env
 env/
 venv/
 downloads/
-qbit_config/
+
 settings.json
 bot.pid
 logs/
