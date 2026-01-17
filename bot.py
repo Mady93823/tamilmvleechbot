@@ -14,6 +14,8 @@ from qbittorrentapi import Client as qbClient
 import settings
 import progress
 import thumb_utils
+import rename_utils
+import channel_utils
 
 # Load Config
 load_dotenv('config.env')
@@ -336,12 +338,21 @@ async def callback_handler(client, callback):
     if data == "refresh_queue":
         await callback.answer("Refreshing...")
         try:
-            # Delete old message
-            await callback.message.delete()
-            # Send new queue status
-            await queue_handler(client, callback.message)
+            # Delete old message and show new queue status
+            old_msg = callback.message
+            await old_msg.delete()
+            
+            # Create a fake message object with user info for queue_handler
+            class FakeMessage:
+                def __init__(self, chat_id, from_user):
+                    self.chat = type('obj', (object,), {'id': chat_id})()
+                    self.from_user = from_user
+                    self.reply = old_msg.reply
+            
+            fake_msg = FakeMessage(old_msg.chat.id, callback.from_user)
+            await queue_handler(client, fake_msg)
         except Exception as e:
-            await callback.answer(f"Error: {e}", show_alert=True)
+            logger.error(f"Refresh error: {e}")
         return
     
     # Handle Manage Channels
