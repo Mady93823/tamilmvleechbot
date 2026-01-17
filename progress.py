@@ -60,6 +60,13 @@ def get_progress_bar_string(percentage):
     c_empty = 10 - c_full
     return f"[{'■' * c_full}{'□' * c_empty}]"
 
+def get_progress_bar(percentage, length=10):
+    """Create visual progress bar [████████░░]"""
+    p = min(max(percentage, 0), 100)
+    filled = int((p / 100) * length)
+    empty = length - filled
+    return f"[{'█' * filled}{'░' * empty}]"
+
 def get_progress_string(current, total, speed, eta, status_text):
     percentage = current * 100 / total
     p_str = get_progress_bar_string(percentage)
