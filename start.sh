@@ -12,7 +12,7 @@ echo "🚀 Starting qBittorrent..."
 qbittorrent-nox -d --webui-port=8090 --confirm-legal-notice
 
 # Wait for it to start
-sleep 5
+sleep 10
 
 # Start Bot
 echo "🤖 Starting Bot..."

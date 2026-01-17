@@ -39,13 +39,7 @@ def connect_qb():
     while True:
         try:
             qb = qbClient(host=QB_HOST, port=QB_PORT)
-            # Internal execution uses default config -> default creds
-            try:
-                qb.auth_log_in(username="admin", password="adminadmin")
-            except Exception:
-                 # Fallback to bypass if somehow config was read
-                qb.auth_log_in()
-                
+            qb.auth_log_in(username="admin", password="adminadmin")
             logger.info("Connected to qBittorrent!")
             return qb
         except Exception as e:
