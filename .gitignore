@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+.venv
+env/
+venv/
+downloads/
+qbit_config/
+settings.json
+bot.pid
+logs/
+.DS_Store
+tests/

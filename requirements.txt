@@ -1,0 +1,4 @@
+pyrogram
+qbittorrent-api
+python-dotenv
+tgcrypto
