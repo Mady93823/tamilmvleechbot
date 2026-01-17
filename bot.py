@@ -120,7 +120,7 @@ async def settings_handler(client, message):
             InlineKeyboardButton(f"Mode: Doc {'✅' if current_mode=='document' else ''}", callback_data="set_mode_doc"),
             InlineKeyboardButton(f"Mode: Video {'✅' if current_mode=='video' else ''}", callback_data="set_mode_vid")
         ],
-        [InlineKeyboardButton "✖️ Close", callback_data="close"]
+        [InlineKeyboardButton("✖️ Close", callback_data="close")]
     ])
     
     await message.reply(text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
