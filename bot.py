@@ -32,7 +32,9 @@ logger = logging.getLogger(__name__)
 # --- Safety Globals ---
 PID_FILE = "bot.pid"
 IS_SHUTTING_DOWN = False
-ACTIVE_TASKS = []  # Simple list to track active download hashes
+
+# Multi-download tracking: {hash: {"user_id": ..., "chat_id": ..., "status_msg": ..., "name": ...}}
+ACTIVE_TASKS = {}
 
 # --- qBittorrent Client ---
 # --- qBittorrent Client ---
@@ -154,7 +156,7 @@ async def help_handler(client, message):
 
 @app.on_message(filters.command("queue"))
 async def queue_handler(client, message):
-    """Show current active download"""
+    """Show all active downloads with progress"""
     if not await check_permissions(message):
         return
     
@@ -162,30 +164,52 @@ async def queue_handler(client, message):
         await message.reply("📭 <b>Queue is empty</b>\n\n<i>No active downloads at the moment</i>", parse_mode=enums.ParseMode.HTML)
         return
     
-    # Get current download info
     try:
-        active_torrents = qb.torrents_info(status_filter="all")
+        # Get all active torrents from qBittorrent
+        all_torrents = qb.torrents_info()
+        active_torrents = {t.hash: t for t in all_torrents if t.hash in ACTIVE_TASKS}
+        
         if not active_torrents:
             await message.reply("📭 <b>Queue is empty</b>\n\n<i>No active downloads</i>", parse_mode=enums.ParseMode.HTML)
             return
         
-        queue_text = "📋 <b>Active Download</b>\n\n"
+        queue_text = f"📋 <b>Active Downloads ({len(active_torrents)})</b>\n\n"
         
-        for torrent in active_torrents:
-            if torrent.hash in ACTIVE_TASKS:
-                progress = torrent.progress * 100
-                from progress import get_readable_file_size
-                
-                queue_text += (
-                    f"📝 <b>Name:</b> {torrent.name}\n"
-                    f"💾 <b>Size:</b> {get_readable_file_size(torrent.size)}\n"
-                    f"📊 <b>Progress:</b> {progress:.1f}%\n"
-                    f"⚡ <b>Speed:</b> {get_readable_file_size(torrent.dlspeed)}/s\n"
-                    f"🌱 <b>Seeds:</b> {torrent.num_seeds} | <b>Peers:</b> {torrent.num_leechs}\n"
-                )
-                break
+        from progress import get_readable_file_size, get_readable_time
         
+        for idx, (t_hash, torrent) in enumerate(active_torrents.items(), 1):
+            progress = torrent.progress * 100
+            task_info = ACTIVE_TASKS.get(t_hash, {})
+            name = task_info.get("name", torrent.name)[:40]
+            
+            # Status icon based on state
+            if torrent.state in ["downloading", "queuedDL", "stalledDL"]:
+                status_icon = "⏳"
+                status_text = "Downloading"
+            elif torrent.state in ["uploading", "stalledUP", "queuedUP"]:
+                status_icon = "📤"
+                status_text = "Uploading to Telegram"
+            else:
+                status_icon = "⏸️"
+                status_text = torrent.state
+            
+            queue_text += f"{status_icon} <b>Download #{idx}</b>\n"
+            queue_text += f"📝 {name}...\n"
+            queue_text += f"💾 {get_readable_file_size(torrent.downloaded)} / {get_readable_file_size(torrent.size)}\n"
+            queue_text += f"📊 Progress: {progress:.1f}%\n"
+            
+            if torrent.state in ["downloading", "queuedDL"]:
+                speed_str = get_readable_file_size(torrent.dlspeed) + "/s"
+                eta = torrent.eta if torrent.eta > 0 else 0
+                eta_str = get_readable_time(eta) if eta > 0 else "Unknown"
+                queue_text += f"⚡ Speed: {speed_str} | ETA: {eta_str}\n"
+                queue_text += f"🌱 Seeds: {torrent.num_seeds} | Peers: {torrent.num_leechs}\n"
+            
+            queue_text += "\n"
+        
+        queue_text += f"<i>Use /cancel to stop current download</i>"
         await message.reply(queue_text, parse_mode=enums.ParseMode.HTML)
+        
     except Exception as e:
         await message.reply(f"❌ <b>Error:</b> {e}", parse_mode=enums.ParseMode.HTML)
 
@@ -199,12 +223,13 @@ async def cancel_handler(client, message):
         await message.reply("❌ <b>No active downloads</b>\n\n<i>Nothing to cancel</i>", parse_mode=enums.ParseMode.HTML)
         return
     
-    # Cancel the current download
+    # Cancel the first active download
     try:
-        t_hash = ACTIVE_TASKS[0]
+        t_hash = list(ACTIVE_TASKS.keys())[0]
         qb.torrents_delete(torrent_hashes=t_hash, delete_files=True)
-        ACTIVE_TASKS.remove(t_hash)
-        await message.reply("✅ <b>Download cancelled</b>\n\nThe current download has been stopped and removed", parse_mode=enums.ParseMode.HTML)
+        if t_hash in ACTIVE_TASKS:
+            del ACTIVE_TASKS[t_hash]
+        await message.reply("✅ <b>Download cancelled</b>\n\nThe download has been stopped and removed", parse_mode=enums.ParseMode.HTML)
     except Exception as e:
         await message.reply(f"❌ <b>Error:</b> {e}", parse_mode=enums.ParseMode.HTML)
 
@@ -583,7 +608,7 @@ async def magnet_handler(client, message):
             pass
             
         if t_hash in ACTIVE_TASKS:
-            ACTIVE_TASKS.remove(t_hash)
+            del ACTIVE_TASKS[t_hash]
         
         # Rule: Graceful Shutdown check
         if IS_SHUTTING_DOWN and not ACTIVE_TASKS:
