@@ -424,8 +424,13 @@ async def magnet_handler(client, message):
         await status_msg.edit(f"❌ Error adding torrent: {e}")
         return
 
-    # 2. Monitor Download
-    ACTIVE_TASKS.append(t_hash)
+    # Track this download with metadata
+    ACTIVE_TASKS[t_hash] = {
+        "user_id": message.from_user.id,
+        "chat_id": message.chat.id,
+        "status_msg": status_msg,
+        "name": torrent.name
+    }
     start_time = time.time()
     
     try:
