@@ -45,7 +45,7 @@ def connect_qb():
         except Exception as e:
             retry_count += 1
             wait_time = min(retry_count * 2, 30) # Exponential backoff capped at 30s
-            logger.error(f"Failed to connect to qBittorrent: {e}. Retrying in {wait_time}s...")
+            logger.error(f"Failed to connect to qBittorrent: {repr(e)}. Retrying in {wait_time}s...")
             time.sleep(wait_time)
 
 qb = connect_qb()
