@@ -6,6 +6,37 @@ from pyrogram.errors import FloodWait
 LAST_UPDATE_TIME = {}
 UPDATE_INTERVAL = 5 # Seconds between edits (User Rule: "Respect Speed Limits")
 
+def get_readable_file_size(size_bytes):
+    """Convert bytes to human readable format"""
+    if size_bytes == 0:
+        return "0B"
+    size_name = ("B", "KB", "MB", "GB", "TB")
+    i = int(math.floor(math.log(size_bytes, 1024)))
+    p = math.pow(1024, i)
+    s = round(size_bytes / p, 2)
+    return f"{s} {size_name[i]}"
+
+def get_readable_time(seconds):
+    """Convert seconds to human readable format"""
+    if seconds == 0:
+        return "0s"
+    
+    periods = [
+        ('d', 86400),
+        ('h', 3600),
+        ('m', 60),
+        ('s', 1)
+    ]
+    
+    result = []
+    for period_name, period_seconds in periods:
+        if seconds >= period_seconds:
+            period_value, seconds = divmod(seconds, period_seconds)
+            result.append(f"{int(period_value)}{period_name}")
+    
+    return ' '.join(result[:2])  # Show only 2 parts
+
+
 def human_readable_size(size, decimal_places=2):
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if size < 1024.0:
