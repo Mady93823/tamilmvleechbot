@@ -5,30 +5,13 @@ services:
     build: .
     container_name: leech_bot
     restart: unless-stopped
-    environment:
-      - QB_HOST=qbittorrent
-      - QB_PORT=8090
     env_file:
       - config.env
+    environment:
+      - QB_HOST=localhost
+      - QB_PORT=8090
     volumes:
       - ./downloads:/app/downloads
       - ./settings.json:/app/settings.json
-    depends_on:
-      - qbittorrent
-
-  qbittorrent:
-    image: lscr.io/linuxserver/qbittorrent:latest
-    container_name: qbittorrent
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - TZ=Asia/Kolkata
-      - WEBUI_PORT=8090
-    volumes:
-      - ./qbit_config:/config
-      - ./downloads:/downloads
     ports:
-      - "8090:8090"
-      - "6881:6881"
-      - "6881:6881/udp"
-    restart: unless-stopped
+      - "8090:8090" # Expose WebUI if needed (Tailscale)
