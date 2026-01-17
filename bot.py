@@ -745,7 +745,7 @@ async def text_handler(client, message):
     # Check if TamilMV link
     if tamilmv_scraper.is_tamilmv_url(text):
         from tamilmv_handler import process_tamilmv_link
-        await process_tamilmv_link(client, message, text)
+        await process_tamilmv_link(client, message, text, magnet_handler)
         return
     
     # Check if magnet link

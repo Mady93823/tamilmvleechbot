@@ -6,7 +6,7 @@ import settings
 
 logger = logging.getLogger(__name__)
 
-async def process_tamilmv_link(client, message, url):
+async def process_tamilmv_link(client, message, url, magnet_handler):
     """Process TamilMV post link - scrape and queue magnets"""
     status_msg = await message.reply("🔄 <b>Scraping TamilMV post...</b>", parse_mode=enums.ParseMode.HTML)
     
