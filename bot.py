@@ -11,6 +11,7 @@ from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import MessageNotModified
 from qbittorrentapi import Client as qbClient
+import pyromod  # Enables listen/ask methods for conversations
 import settings
 import progress
 import thumb_utils

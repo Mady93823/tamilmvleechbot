@@ -3,3 +3,4 @@ qbittorrent-api
 python-dotenv
 tgcrypto
 natsort
+pyromod
