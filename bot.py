@@ -806,8 +806,8 @@ if __name__ == "__main__":
             with open(PID_FILE, "r") as f:
                 old_pid = int(f.read())
             # Optional: os.kill(old_pid, signal.SIGTERM)
-        except:
-            pass
+    except:
+        pass
             
     with open(PID_FILE, "w") as f:
         f.write(str(os.getpid()))
@@ -816,3 +816,4 @@ if __name__ == "__main__":
         app.run()
     finally:
         cleanup_pid()
+
