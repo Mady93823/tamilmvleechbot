@@ -11,7 +11,6 @@ from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import MessageNotModified
 from qbittorrentapi import Client as qbClient
-import pyromod  # Enables listen/ask methods for conversations
 import settings
 import progress
 import thumb_utils
@@ -102,13 +101,56 @@ def cleanup_pid():
 
 @app.on_message(filters.command("start"))
 async def start_handler(client, message):
-    # Rule "User First": Only reply if messaged first (handled by being a bot command)
     await message.reply(
-        "👋 Welcome to Simple Leech Bot!\n\n"
-        "Send me a <b>Magnet Link</b> to start leeching.\n"
-        "Use /settings to change configuration.",
+        "👋 <b>Welcome to TamilMV Leech Bot!</b>\n\n"
+        "✨ <b>Features:</b>\n"
+        "• ⚡ Fast downloads via qBittorrent\n"
+        "• 📤 Direct upload to Telegram\n"
+        "• 🖼️ Custom thumbnails\n"
+        "• 📝 Automatic filename cleaning\n"
+        "• 🎬 Support for movies & series\n\n"
+        "📋 <b>Commands:</b>\n"
+        "/settings - Configure bot\n"
+        "/setthumb - Set custom thumbnail\n"
+        "/help - Show all commands\n\n"
+        "<i>Send a magnet link to start downloading!</i>",
         parse_mode=enums.ParseMode.HTML
     )
+
+@app.on_message(filters.command("setthumb") & filters.photo)
+async def setthumb_handler(client, message):
+    """Handle thumbnail upload via command"""
+    if not await check_permissions(message):
+        return
+    
+    try:
+        user_id = message.from_user.id
+        file_path = await message.download()
+        await thumb_utils.set_user_thumbnail(user_id, file_path)
+        await message.reply("✅ <b>Thumbnail set successfully!</b>", parse_mode=enums.ParseMode.HTML)
+    except Exception as e:
+        await message.reply(f"❌ <b>Error setting thumbnail:</b> {e}", parse_mode=enums.ParseMode.HTML)
+
+@app.on_message(filters.command("help"))
+async def help_handler(client, message):
+    """Show help message with all commands"""
+    help_text = (
+        "📖 <b>Bot Commands</b>\n\n"
+        "<b>Basic Commands:</b>\n"
+        "/start - Welcome message\n"
+        "/help - Show this help message\n"
+        "/settings - Configure bot settings\n\n"
+        "<b>Thumbnail Commands:</b>\n"
+        "/setthumb - Set custom thumbnail (send with photo)\n\n"
+        "<b>Download:</b>\n"
+        "Just send a magnet link to start downloading!\n\n"
+        "<b>Settings Options:</b>\n"
+        "• Max file size (2GB/4GB)\n"
+        "• Upload mode (Document/Video)\n"
+        "• Custom thumbnails\n\n"
+        "<i>All files are auto-cleaned after upload</i>"
+    )
+    await message.reply(help_text, parse_mode=enums.ParseMode.HTML)
 
 @app.on_message(filters.command("settings"))
 async def settings_handler(client, message):
@@ -120,30 +162,36 @@ async def settings_handler(client, message):
     current_mode = settings.get_setting("upload_mode")
     has_thumb = await thumb_utils.get_user_thumbnail(user_id) is not None
     
+    # Vertical radio-style layout
+    size_2_icon = "🔘" if current_size == 2 else "⚪"
+    size_4_icon = "🔘" if current_size == 4 else "⚪"
+    mode_doc_icon = "🔘" if current_mode == "document" else "⚪"
+    mode_vid_icon = "🔘" if current_mode == "video" else "⚪"
+    
     text = (f"⚙️ <b>Settings</b>\n\n"
-            f"<b>Max File Size:</b> {current_size}GB\n"
-            f"<b>Upload Mode:</b> {current_mode}\n"
-            f"<b>Thumbnail:</b> {'✅ Set' if has_thumb else '❌ Not Set'}")
-            
+            f"📁 <b>Max File Size</b>\n"
+            f"  {size_2_icon} 2GB\n"
+            f"  {size_4_icon} 4GB\n\n"
+            f"📤 <b>Upload Mode</b>\n"
+            f"  {mode_doc_icon} Document\n"
+            f"  {mode_vid_icon} Video\n\n"
+            f"🖼️ <b>Thumbnail:</b> {'✅ Set' if has_thumb else '❌ Not Set'}")
+    
     thumb_buttons = []
     if has_thumb:
         thumb_buttons = [
-            InlineKeyboardButton("👁️ View Thumb", callback_data="view_thumb"),
-            InlineKeyboardButton("🗑️ Delete Thumb", callback_data="del_thumb")
+            [InlineKeyboardButton("👁️ View Thumb", callback_data="view_thumb")],
+            [InlineKeyboardButton("🗑️ Delete Thumb", callback_data="del_thumb")]
         ]
     else:
-        thumb_buttons = [InlineKeyboardButton("📷 Upload Thumb", callback_data="upload_thumb")]
+        thumb_buttons = [[InlineKeyboardButton("📷 Upload Thumb", callback_data="upload_thumb")]]
     
     buttons = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(f"Set 2GB {'✅' if current_size==2 else ''}", callback_data="set_size_2"),
-            InlineKeyboardButton(f"Set 4GB {'✅' if current_size==4 else ''}", callback_data="set_size_4")
-        ],
-        [
-            InlineKeyboardButton(f"Mode: Doc {'✅' if current_mode=='document' else ''}", callback_data="set_mode_doc"),
-            InlineKeyboardButton(f"Mode: Video {'✅' if current_mode=='video' else ''}", callback_data="set_mode_vid")
-        ],
-        thumb_buttons,
+        [InlineKeyboardButton(f"{size_2_icon} 2GB", callback_data="set_size_2")],
+        [InlineKeyboardButton(f"{size_4_icon} 4GB", callback_data="set_size_4")],
+        [InlineKeyboardButton(f"{mode_doc_icon} Document", callback_data="set_mode_doc")],
+        [InlineKeyboardButton(f"{mode_vid_icon} Video", callback_data="set_mode_vid")],
+        *thumb_buttons,
         [InlineKeyboardButton("✖️ Close", callback_data="close")]
     ])
     
@@ -161,14 +209,13 @@ async def callback_handler(client, callback):
     user_id = callback.from_user.id
     
     if data == "upload_thumb":
-        await callback.message.edit("📷 <b>Send me a photo to set as thumbnail</b>\n\n<i>Timeout: 60 seconds</i>", parse_mode=enums.ParseMode.HTML)
-        try:
-            photo_msg = await app.listen(callback.message.chat.id, filters.photo, 60)
-            file_path = await photo_msg.download()
-            await thumb_utils.set_user_thumbnail(user_id, file_path)
-            await callback.message.edit("✅ <b>Thumbnail set successfully!</b>", parse_mode=enums.ParseMode.HTML)
-        except asyncio.TimeoutError:
-            await callback.message.edit("⏱️ <b>Timeout!</b> Thumbnail upload cancelled.", parse_mode=enums.ParseMode.HTML)
+        await callback.message.edit(
+            "📷 <b>To set thumbnail:</b>\n\n"
+            "Send /setthumb command with a photo (as caption or reply)\n\n"
+            "<i>Example: Send a photo with caption /setthumb</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+        await callback.answer()
         return
     
     if data == "view_thumb":
@@ -206,23 +253,41 @@ async def callback_handler(client, callback):
     else:
         return
         
-    # Refresh menu by rebuilding it
+    # Refresh menu by rebuilding it with current state (including thumbnail)
     current_size = settings.get_setting("max_file_size") / (1024**3)
     current_mode = settings.get_setting("upload_mode")
+    has_thumb = await thumb_utils.get_user_thumbnail(user_id) is not None
+    
+    # Vertical radio-style icons
+    size_2_icon = "🔘" if current_size == 2 else "⚪"
+    size_4_icon = "🔘" if current_size == 4 else "⚪"
+    mode_doc_icon = "🔘" if current_mode == "document" else "⚪"
+    mode_vid_icon = "🔘" if current_mode == "video" else "⚪"
     
     text = (f"⚙️ <b>Settings</b>\n\n"
-            f"<b>Max File Size:</b> {current_size}GB\n"
-            f"<b>Upload Mode:</b> {current_mode}")
+            f"📁 <b>Max File Size</b>\n"
+            f"  {size_2_icon} 2GB\n"
+            f"  {size_4_icon} 4GB\n\n"
+            f"📤 <b>Upload Mode</b>\n"
+            f"  {mode_doc_icon} Document\n"
+            f"  {mode_vid_icon} Video\n\n"
+            f"🖼️ <b>Thumbnail:</b> {'✅ Set' if has_thumb else '❌ Not Set'}")
+    
+    thumb_buttons = []
+    if has_thumb:
+        thumb_buttons = [
+            [InlineKeyboardButton("👁️ View Thumb", callback_data="view_thumb")],
+            [InlineKeyboardButton("🗑️ Delete Thumb", callback_data="del_thumb")]
+        ]
+    else:
+        thumb_buttons = [[InlineKeyboardButton("📷 Upload Thumb", callback_data="upload_thumb")]]
             
     buttons = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(f"Set 2GB {'✅' if current_size==2 else ''}", callback_data="set_size_2"),
-            InlineKeyboardButton(f"Set 4GB {'✅' if current_size==4 else ''}", callback_data="set_size_4")
-        ],
-        [
-            InlineKeyboardButton(f"Mode: Doc {'✅' if current_mode=='document' else ''}", callback_data="set_mode_doc"),
-            InlineKeyboardButton(f"Mode: Video {'✅' if current_mode=='video' else ''}", callback_data="set_mode_vid")
-        ],
+        [InlineKeyboardButton(f"{size_2_icon} 2GB", callback_data="set_size_2")],
+        [InlineKeyboardButton(f"{size_4_icon} 4GB", callback_data="set_size_4")],
+        [InlineKeyboardButton(f"{mode_doc_icon} Document", callback_data="set_mode_doc")],
+        [InlineKeyboardButton(f"{mode_vid_icon} Video", callback_data="set_mode_vid")],
+        *thumb_buttons,
         [InlineKeyboardButton("✖️ Close", callback_data="close")]
     ])
     

@@ -3,6 +3,5 @@ qbittorrent-api
 python-dotenv
 tgcrypto
 natsort
-pyromod
 aiofiles
 aioshutil
