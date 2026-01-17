@@ -136,6 +136,38 @@ async def setthumb_handler(client, message):
     except Exception as e:
         await message.reply(f"❌ <b>Error setting thumbnail:</b> {e}", parse_mode=enums.ParseMode.HTML)
 
+@app.on_message(filters.command("setchannels"))
+async def setchannels_handler(client, message):
+    """Set upload channels quickly"""
+    if not await check_permissions(message):
+        return
+    
+    text = message.text.replace("/setchannels", "").strip()
+    
+    if not text:
+        channels = channel_utils.get_channels()
+        if channels:
+            msg = "📢 <b>Current Channels:</b>\n\n"
+            for ch in channels:
+                msg += f"• <code>{ch}</code>\n"
+            msg += "\n<i>To update: /setchannels -1001234567 | -1009876543</i>"
+        else:
+            msg = "📢 <b>No channels set</b>\n\n<i>Usage: /setchannels -1001234567 | -1009876543</i>"
+        await message.reply(msg, parse_mode=enums.ParseMode.HTML)
+        return
+    
+    channel_ids = [ch.strip() for ch in text.replace("|", " ").split()]
+    valid = [ch for ch in channel_ids if ch.startswith("-100")]
+    
+    if valid:
+        settings.update_setting("upload_channels", valid)
+        msg = f"✅ <b>Updated!</b>\n\n<b>Channels ({len(valid)}):</b>\n"
+        for ch in valid:
+            msg += f"• <code>{ch}</code>\n"
+        await message.reply(msg, parse_mode=enums.ParseMode.HTML)
+    else:
+        await message.reply("❌ <b>Invalid IDs</b>\n\n<i>Must start with -100</i>", parse_mode=enums.ParseMode.HTML)
+
 @app.on_message(filters.command("help"))
 async def help_handler(client, message):
     """Show help message with all commands"""
@@ -657,6 +689,7 @@ async def magnet_handler(client, message):
                 
                 up_start = time.time()
                 
+
                 async def progress_callback(current, total):
                     try:
                         await progress.progress_for_pyrogram(
@@ -666,23 +699,45 @@ async def magnet_handler(client, message):
                     except Exception:
                         pass
 
-                # Upload based on mode
-                if mode == "document":
-                    await client.send_document(
-                        chat_id=message.chat.id,
-                        document=file_to_upload,
-                        thumb=user_thumb,
-                        caption=f"✅ {file_name}",
-                        progress=progress_callback
-                    )
-                else:
-                    await client.send_video(
-                        chat_id=message.chat.id,
-                        video=file_to_upload,
-                        thumb=user_thumb,
-                        caption=f"✅ {file_name}",
-                        progress=progress_callback
-                    )
+                # Upload to all configured channels
+                for channel_idx, channel_id in enumerate(upload_channels, 1):
+                    try:
+                        # Convert string channel ID to int
+                        channel_id = int(channel_id) if isinstance(channel_id, str) else channel_id
+                        
+                        # Update status to show channel progress (if multiple channels)
+                        if len(upload_channels) > 1:
+                            await status_msg.edit(
+                                f"📤 File {idx}/{len(files_to_upload)} → Channel {channel_idx}/{len(upload_channels)}\n"
+                                f"{file_name[:40]}...",
+                                parse_mode=enums.ParseMode.HTML
+                            )
+                        
+                        # Upload based on mode
+                        if mode == "document":
+                            await client.send_document(
+                                chat_id=channel_id,
+                                document=file_to_upload,
+                                thumb=user_thumb,
+                                caption=f"✅ {file_name}",
+                                progress=progress_callback if channel_idx == 1 else None  # Progress only on first channel
+                            )
+                        else:
+                            await client.send_video(
+                                chat_id=channel_id,
+                                video=file_to_upload,
+                                thumb=user_thumb,
+                                caption=f"✅ {file_name}",
+                                progress=progress_callback if channel_idx == 1 else None
+                            )
+                        
+                        # Rate limit between channels (2s delay)
+                        if channel_idx < len(upload_channels):
+                            await asyncio.sleep(2)
+                    
+                    except Exception as e:
+                        logger.error(f"Failed to upload {file_name} to channel {channel_id}: {e}")
+                        continue
                 
                 uploaded_count += 1
                 
