@@ -1,3 +1,10 @@
+import asyncio
+import logging
+from pyrogram import enums
+from plugins import tamilmv_scraper
+import settings
+
+logger = logging.getLogger(__name__)
 
 async def process_tamilmv_link(client, message, url):
     """Process TamilMV post link - scrape and queue magnets"""
