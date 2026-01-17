@@ -16,6 +16,7 @@ import progress
 import thumb_utils
 import rename_utils
 import channel_utils
+from plugins import tamilmv_scraper
 
 # Load Config
 load_dotenv('config.env')
@@ -732,6 +733,25 @@ async def process_download(t_hash, message, status_msg):
             await status_msg.edit("🔄 <b>Starting download...</b>\n\n<i>Slot became available!</i>", parse_mode=enums.ParseMode.HTML)
             # Re-trigger magnet handler logic
             await magnet_handler(app, msg)
+
+@app.on_message(filters.text & filters.private)
+async def text_handler(client, message):
+    """Handle text messages - check for TamilMV links or magnets"""
+    if not await check_permissions(message):
+        return
+    
+    text = message.text.strip()
+    
+    # Check if TamilMV link
+    if tamilmv_scraper.is_tamilmv_url(text):
+        from tamilmv_handler import process_tamilmv_link
+        await process_tamilmv_link(client, message, text)
+        return
+    
+    # Check if magnet link
+    if text.startswith("magnet:?xt=urn:btih:"):
+        await magnet_handler(client, message)
+        return
 
 @app.on_message(filters.regex(r"^magnet:\?xt=urn:btih:[a-zA-Z0-9]*"))
 async def magnet_handler(client, message):

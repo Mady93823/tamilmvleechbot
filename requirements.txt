@@ -7,3 +7,6 @@ aiofiles
 aioshutil
 psutil
 pymongo
+requests
+beautifulsoup4
+lxml
