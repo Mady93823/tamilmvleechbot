@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 # --- Safety Globals ---
 PID_FILE = "bot.pid"
 IS_SHUTTING_DOWN = False
-ACTIVE_TASKS = [] # List of active Task IDs or Objects
+ACTIVE_TASKS = []  # Simple list to track active download hashes
 
 # --- qBittorrent Client ---
 # --- qBittorrent Client ---
@@ -151,6 +151,62 @@ async def help_handler(client, message):
         "<i>All files are auto-cleaned after upload</i>"
     )
     await message.reply(help_text, parse_mode=enums.ParseMode.HTML)
+
+@app.on_message(filters.command("queue"))
+async def queue_handler(client, message):
+    """Show current active download"""
+    if not await check_permissions(message):
+        return
+    
+    if not ACTIVE_TASKS:
+        await message.reply("📭 <b>Queue is empty</b>\n\n<i>No active downloads at the moment</i>", parse_mode=enums.ParseMode.HTML)
+        return
+    
+    # Get current download info
+    try:
+        active_torrents = qb.torrents_info(status_filter="all")
+        if not active_torrents:
+            await message.reply("📭 <b>Queue is empty</b>\n\n<i>No active downloads</i>", parse_mode=enums.ParseMode.HTML)
+            return
+        
+        queue_text = "📋 <b>Active Download</b>\n\n"
+        
+        for torrent in active_torrents:
+            if torrent.hash in ACTIVE_TASKS:
+                progress = torrent.progress * 100
+                from progress import get_readable_file_size
+                
+                queue_text += (
+                    f"📝 <b>Name:</b> {torrent.name}\n"
+                    f"💾 <b>Size:</b> {get_readable_file_size(torrent.size)}\n"
+                    f"📊 <b>Progress:</b> {progress:.1f}%\n"
+                    f"⚡ <b>Speed:</b> {get_readable_file_size(torrent.dlspeed)}/s\n"
+                    f"🌱 <b>Seeds:</b> {torrent.num_seeds} | <b>Peers:</b> {torrent.num_leechs}\n"
+                )
+                break
+        
+        await message.reply(queue_text, parse_mode=enums.ParseMode.HTML)
+    except Exception as e:
+        await message.reply(f"❌ <b>Error:</b> {e}", parse_mode=enums.ParseMode.HTML)
+
+@app.on_message(filters.command("cancel"))
+async def cancel_handler(client, message):
+    """Cancel current download"""
+    if not await check_permissions(message):
+        return
+    
+    if not ACTIVE_TASKS:
+        await message.reply("❌ <b>No active downloads</b>\n\n<i>Nothing to cancel</i>", parse_mode=enums.ParseMode.HTML)
+        return
+    
+    # Cancel the current download
+    try:
+        t_hash = ACTIVE_TASKS[0]
+        qb.torrents_delete(torrent_hashes=t_hash, delete_files=True)
+        ACTIVE_TASKS.remove(t_hash)
+        await message.reply("✅ <b>Download cancelled</b>\n\nThe current download has been stopped and removed", parse_mode=enums.ParseMode.HTML)
+    except Exception as e:
+        await message.reply(f"❌ <b>Error:</b> {e}", parse_mode=enums.ParseMode.HTML)
 
 @app.on_message(filters.command("settings"))
 async def settings_handler(client, message):
@@ -507,8 +563,19 @@ async def magnet_handler(client, message):
                 logger.error(f"Failed to upload {file_to_upload}: {e}")
                 continue
         
-        # Final status
-        await status_msg.edit(f"✅ <b>Upload Complete!</b>\n{uploaded_count} file(s) uploaded.")
+        # Final status with completion notification
+        from progress import get_readable_file_size
+        total_size_uploaded = sum(os.path.getsize(f) for f in files_to_upload if os.path.exists(f))
+        size_str = get_readable_file_size(total_size_uploaded)
+        
+        completion_text = (
+            f"✅ <b>Upload Complete!</b>\n\n"
+            f"📊 <b>Summary:</b>\n"
+            f"• Files uploaded: {uploaded_count}\n"
+            f"• Total size: {size_str}\n\n"
+            f"<i>All files have been cleaned up</i>"
+        )
+        await status_msg.edit(completion_text, parse_mode=enums.ParseMode.HTML)
     
     finally:
         # Clean qBittorrent temp files
