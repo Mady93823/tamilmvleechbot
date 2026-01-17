@@ -19,7 +19,8 @@ DEFAULT_SETTINGS = {
     "max_file_size": 2 * 1024 * 1024 * 1024,  # 2GB in bytes
     "upload_mode": "document",
     "sudo_users": [],
-    "user_thumbnails": {}  # {user_id: "Thumbnails/{user_id}.jpg"}
+    "user_thumbnails": {},  # {user_id: "Thumbnails/{user_id}.jpg"}
+    "upload_channels": []  # ["-1001234567", "-1009876543"] - Multiple channel IDs
 }
 
 # In-memory cache

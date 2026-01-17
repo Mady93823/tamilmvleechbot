@@ -35,6 +35,7 @@ IS_SHUTTING_DOWN = False
 
 # Multi-download tracking: {hash: {"user_id": ..., "chat_id": ..., "status_msg": ..., "name": ...}}
 ACTIVE_TASKS = {}
+MAX_CONCURRENT_DOWNLOADS = 5  # Maximum concurrent downloads allowed
 
 # --- qBittorrent Client ---
 # --- qBittorrent Client ---
@@ -207,8 +208,16 @@ async def queue_handler(client, message):
             
             queue_text += "\n"
         
-        queue_text += f"<i>Use /cancel to stop current download</i>"
-        await message.reply(queue_text, parse_mode=enums.ParseMode.HTML)
+        # Add individual cancel buttons for each download
+        buttons = []
+        for t_hash, task_info in active_torrents.items():
+            name = task_info.get("name", "Download")[:20]
+            buttons.append([InlineKeyboardButton(f"❌ Cancel: {name}...", callback_data=f"cancel_{t_hash}")])
+        
+        buttons.append([InlineKeyboardButton("🔄 Refresh", callback_data="refresh_queue")])
+        buttons.append([InlineKeyboardButton("✖️ Close", callback_data="close")])
+        
+        await message.reply(queue_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode=enums.ParseMode.HTML)
         
     except Exception as e:
         await message.reply(f"❌ <b>Error:</b> {e}", parse_mode=enums.ParseMode.HTML)
@@ -311,16 +320,77 @@ async def callback_handler(client, callback):
         await callback.answer("🗑️ Thumbnail deleted!")
         return
         
+    # Handle Cancel button from status message OR queue
     if data.startswith("cancel_"):
-        t_hash = data.split("_")[1]
+        t_hash = data.replace("cancel_", "")
         try:
             qb.torrents_delete(torrent_hashes=t_hash, delete_files=True)
             if t_hash in ACTIVE_TASKS:
-                if t_hash in ACTIVE_TASKS:
-                    del ACTIVE_TASKS[t_hash]
-            await callback.message.edit("❌ <b>Download Cancelled by User.</b>")
+                del ACTIVE_TASKS[t_hash]
+            await callback.message.edit(f"✅ <b>Download Cancelled</b>\n\nTorrent has been removed from queue", parse_mode=enums.ParseMode.HTML)
         except Exception as e:
             await callback.answer(f"Error cancelling: {e}", show_alert=True)
+        return
+    
+    # Handle Queue Refresh button
+    if data == "refresh_queue":
+        await callback.answer("Refreshing...")
+        try:
+            # Delete old message
+            await callback.message.delete()
+            # Send new queue status
+            await queue_handler(client, callback.message)
+        except Exception as e:
+            await callback.answer(f"Error: {e}", show_alert=True)
+        return
+    
+    # Handle Manage Channels
+    if data == "manage_channels":
+        channels = channel_utils.get_channels()
+        channel_text = "📢 <b>Upload Channels</b>\n\n"
+        
+        if channels:
+            channel_text += f"<b>Active Channels ({len(channels)}):</b>\n"
+            for ch in channels:
+                channel_text += f"• <code>{ch}</code>\n"
+            channel_text += "\n"
+        else:
+            channel_text += "<i>No channels configured</i>\n\n"
+        
+        channel_text += (
+            "<b>To add channels:</b>\n"
+            "Send channel IDs separated by <code>|</code>\n"
+            "Example: <code>-1001234567 | -1009876543</code>\n\n"
+            "<i>Files will be uploaded to all channels</i>"
+        )
+        
+        buttons = [
+            [InlineKeyboardButton("🔙 Back", callback_data="back_to_settings")]
+        ]
+        
+        if channels:
+            buttons.insert(0, [InlineKeyboardButton("🗑️ Clear All", callback_data="clear_channels")])
+        
+        await callback.message.edit(channel_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode=enums.ParseMode.HTML)
+        await callback.answer()
+        return
+    
+    # Clear all channels
+    if data == "clear_channels":
+        channel_utils.clear_all_channels()
+        await callback.answer("✅ All channels cleared")
+        # Show manage channels again
+        await callback_handler(client, callback)
+        return
+    
+     # Back to settings
+    if data == "back_to_settings":
+        await settings_handler(client, callback.message)
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        await callback.answer()
         return
 
     
@@ -383,6 +453,17 @@ async def magnet_handler(client, message):
         return
 
     if not await check_permissions(message):
+        return
+    
+    # Check queue limit
+    if len(ACTIVE_TASKS) >= MAX_CONCURRENT_DOWNLOADS:
+        await message.reply(
+            f"⚠️ <b>Queue is full!</b>\n\n"
+            f"Currently processing {len(ACTIVE_TASKS)}/{MAX_CONCURRENT_DOWNLOADS} downloads.\n"
+            f"Your magnet link will be added after one finishes.\n\n"
+            f"<i>Use /queue to see active downloads or /cancel to free a slot</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
         return
 
     magnet_link = message.text.strip()
@@ -523,6 +604,22 @@ async def magnet_handler(client, message):
         user_id = message.from_user.id
         user_thumb = await thumb_utils.get_user_thumbnail(user_id)
         
+        # Get upload channels (default to sender's chat if none configured)
+        upload_channels = channel_utils.get_channels()
+        if not upload_channels:
+            upload_channels = [message.chat.id]
+        
+        # Warn if too many total uploads
+        total_uploads = len(files_to_upload) * len(upload_channels)
+        if total_uploads > 100:
+            await status_msg.edit(
+                f"⚠️ <b>Large upload detected!</b>\n\n"
+                f"{len(files_to_upload)} files × {len(upload_channels)} channels = {total_uploads} uploads\n\n"
+                f"This will take a while. Auto-continuing in 10 seconds...",
+                parse_mode=enums.ParseMode.HTML
+            )
+            await asyncio.sleep(10)
+        
         for idx, file_to_upload in enumerate(files_to_upload, 1):
             try:
                 # Skip if cancelled
@@ -603,6 +700,21 @@ async def magnet_handler(client, message):
         await status_msg.edit(completion_text, parse_mode=enums.ParseMode.HTML)
     
     finally:
+        # CRITICAL: Delete downloaded files explicitly
+        try:
+            info_list = qb.torrents_info(torrent_hashes=t_hash)
+            if info_list:
+                content_path = info_list[0].content_path
+                if os.path.exists(content_path):
+                    logger.info(f"Deleting downloaded files: {content_path}")
+                    if os.path.isdir(content_path):
+                        import shutil
+                        shutil.rmtree(content_path)
+                    else:
+                        os.remove(content_path)
+        except Exception as e:
+            logger.error(f"File cleanup error: {e}")
+        
         # Clean qBittorrent temp files from downloads directory
         try:
             from fs_utils import clean_unwanted
@@ -610,9 +722,9 @@ async def magnet_handler(client, message):
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
         
-        # Remove torrent from qBittorrent WITH files (safe now - uploads are done)
+        # Remove torrent from qBittorrent (files already deleted above)
         try:
-            qb.torrents_delete(torrent_hashes=t_hash, delete_files=True)
+            qb.torrents_delete(torrent_hashes=t_hash, delete_files=False)
         except Exception:
             pass
             
