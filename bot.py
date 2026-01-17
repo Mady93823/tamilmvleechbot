@@ -163,7 +163,7 @@ async def callback_handler(client, callback):
     if data == "upload_thumb":
         await callback.message.edit("📷 <b>Send me a photo to set as thumbnail</b>\n\n<i>Timeout: 60 seconds</i>", parse_mode=enums.ParseMode.HTML)
         try:
-            photo_msg = await app.listen(callback.message.chat.id, filters=filters.photo, timeout=60)
+            photo_msg = await app.listen(callback.message.chat.id, filters.photo, 60)
             file_path = await photo_msg.download()
             await thumb_utils.set_user_thumbnail(user_id, file_path)
             await callback.message.edit("✅ <b>Thumbnail set successfully!</b>", parse_mode=enums.ParseMode.HTML)
