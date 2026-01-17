@@ -218,7 +218,18 @@ async def magnet_handler(client, message):
                 # We continue the loop!
                 pass
                 
-            info = qb.torrents_info(torrent_hashes=t_hash)[0]
+            if t_hash not in ACTIVE_TASKS:
+                return
+
+            try:
+                info_list = qb.torrents_info(torrent_hashes=t_hash)
+                if not info_list:
+                     # Torrent removed externally or cancelled
+                     if t_hash in ACTIVE_TASKS: ACTIVE_TASKS.remove(t_hash)
+                     return
+                info = info_list[0]
+            except Exception:
+                return
             
             cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_{t_hash}")]])
 
