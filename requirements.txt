@@ -6,3 +6,4 @@ natsort
 aiofiles
 aioshutil
 psutil
+pymongo

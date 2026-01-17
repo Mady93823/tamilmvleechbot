@@ -1,9 +1,20 @@
-import json
+#!/usr/bin/env python3
+"""
+MongoDB-based settings storage for TamilMV Leech Bot
+Much more reliable than JSON file storage
+"""
 import os
-import asyncio
+from pymongo import MongoClient
+from dotenv import load_dotenv
 
-SETTINGS_FILE = "settings.json"
+load_dotenv('config.env')
 
+# MongoDB Connection
+MONGO_URI = os.getenv("MONGO_URI", "")
+DATABASE_NAME = "tamilmv"
+COLLECTION_NAME = "settings"
+
+# Default settings
 DEFAULT_SETTINGS = {
     "max_file_size": 2 * 1024 * 1024 * 1024,  # 2GB in bytes
     "upload_mode": "document",
@@ -11,40 +22,94 @@ DEFAULT_SETTINGS = {
     "user_thumbnails": {}  # {user_id: "Thumbnails/{user_id}.jpg"}
 }
 
-# In-memory cache to reduce disk reads during high load
+# In-memory cache
 _settings_cache = None
+_db_client = None
+_collection = None
+
+def connect_db():
+    """Connect to MongoDB"""
+    global _db_client, _collection
+    
+    if not MONGO_URI:
+        raise Exception("MONGO_URI not set in config.env!")
+    
+    try:
+        _db_client = MongoClient(MONGO_URI)
+        db = _db_client[DATABASE_NAME]
+        _collection = db[COLLECTION_NAME]
+        
+        # Test connection
+        _db_client.server_info()
+        print(f"✅ Connected to MongoDB: {DATABASE_NAME}.{COLLECTION_NAME}")
+        
+        # Initialize with defaults if empty
+        if _collection.count_documents({}) == 0:
+            _collection.insert_one({"_id": "global_settings", **DEFAULT_SETTINGS})
+            print("📝 Initialized default settings in MongoDB")
+            
+    except Exception as e:
+        print(f"❌ MongoDB connection failed: {e}")
+        raise
 
 def load_settings():
-    global _settings_cache
+    """Load settings from MongoDB"""
+    global _settings_cache, _collection
+    
     if _settings_cache:
         return _settings_cache
     
-    # Fix: If settings.json is a directory, remove it
-    if os.path.exists(SETTINGS_FILE) and os.path.isdir(SETTINGS_FILE):
-        import shutil
-        shutil.rmtree(SETTINGS_FILE)
-        
-    if not os.path.exists(SETTINGS_FILE):
-        save_settings(DEFAULT_SETTINGS)
-        return DEFAULT_SETTINGS
+    if _collection is None:
+        connect_db()
+    
     try:
-        with open(SETTINGS_FILE, "r") as f:
-            _settings_cache = json.load(f)
+        doc = _collection.find_one({"_id": "global_settings"})
+        if doc:
+            # Remove _id from returned dict
+            doc.pop("_id", None)
+            _settings_cache = doc
             return _settings_cache
-    except:
-        return DEFAULT_SETTINGS
+        else:
+            # Initialize if not exists
+            _collection.insert_one({"_id": "global_settings", **DEFAULT_SETTINGS})
+            _settings_cache = DEFAULT_SETTINGS.copy()
+            return _settings_cache
+    except Exception as e:
+        print(f"Warning: Failed to load settings from MongoDB: {e}")
+        return DEFAULT_SETTINGS.copy()
 
 def save_settings(settings):
-    global _settings_cache
-    _settings_cache = settings
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(settings, f, indent=4)
+    """Save settings to MongoDB"""
+    global _settings_cache, _collection
+    
+    if _collection is None:
+        connect_db()
+    
+    try:
+        _settings_cache = settings
+        _collection.update_one(
+            {"_id": "global_settings"},
+            {"$set": settings},
+            upsert=True
+        )
+    except Exception as e:
+        print(f"Warning: Failed to save settings to MongoDB: {e}")
 
 def get_setting(key):
+    """Get a specific setting"""
     settings = load_settings()
     return settings.get(key, DEFAULT_SETTINGS.get(key))
 
 def update_setting(key, value):
+    """Update a specific setting"""
     settings = load_settings()
     settings[key] = value
     save_settings(settings)
+
+# Initialize connection on import
+try:
+    if MONGO_URI:
+        connect_db()
+except Exception as e:
+    print(f"Warning: MongoDB initialization failed: {e}")
+    print("Bot will use default settings")
