@@ -153,6 +153,7 @@ async def callback_handler(client, callback):
             await callback.answer(f"Error cancelling: {e}", show_alert=True)
         return
 
+    
     if data == "set_size_2":
         settings.update_setting("max_file_size", 2 * 1024**3)
     elif data == "set_size_4":
@@ -161,9 +162,30 @@ async def callback_handler(client, callback):
         settings.update_setting("upload_mode", "document")
     elif data == "set_mode_vid":
         settings.update_setting("upload_mode", "video")
+    else:
+        return
         
-    # Refresh menu
-    await settings_handler(client, callback.message)
+    # Refresh menu by rebuilding it
+    current_size = settings.get_setting("max_file_size") / (1024**3)
+    current_mode = settings.get_setting("upload_mode")
+    
+    text = (f"⚙️ <b>Settings</b>\n\n"
+            f"<b>Max File Size:</b> {current_size}GB\n"
+            f"<b>Upload Mode:</b> {current_mode}")
+            
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(f"Set 2GB {'✅' if current_size==2 else ''}", callback_data="set_size_2"),
+            InlineKeyboardButton(f"Set 4GB {'✅' if current_size==4 else ''}", callback_data="set_size_4")
+        ],
+        [
+            InlineKeyboardButton(f"Mode: Doc {'✅' if current_mode=='document' else ''}", callback_data="set_mode_doc"),
+            InlineKeyboardButton(f"Mode: Video {'✅' if current_mode=='video' else ''}", callback_data="set_mode_vid")
+        ],
+        [InlineKeyboardButton("✖️ Close", callback_data="close")]
+    ])
+    
+    await callback.message.edit(text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
     await callback.answer("Settings Updated!")
 
 @app.on_message(filters.regex(r"^magnet:\?xt=urn:btih:[a-zA-Z0-9]*"))
@@ -179,18 +201,25 @@ async def magnet_handler(client, message):
     status_msg = await message.reply("🔄 checking magnet link...")
     
     # 1. Add Torrent
+    ADD_TIME = time.time()
     try:
         # qBittorrent returns "Ok." or similar string on success
         qb.torrents_add(urls=magnet_link, save_path=os.path.abspath(DOWNLOAD_DIR))
-        # Wait a sec for metadata
+        # Wait for metadata to be fetched
         await asyncio.sleep(2)
         
-        # Get torrent info (assuming latest added is ours, imperfect but simple for now)
-        # Better way: extract hash from magnet, but let's just grab the most recent downloading one
+        # Get torrent info with timeout
         torrents = qb.torrents_info(status_filter="downloading")
         if not torrents:
-            await status_msg.edit("❌ Failed to add torrent or metadata taking too long.")
-            return
+            # Wait up to 120 seconds for metadata
+            while True:
+                await asyncio.sleep(3)
+                torrents = qb.torrents_info(status_filter="downloading")
+                if torrents:
+                    break
+                if time.time() - ADD_TIME >= 120:
+                    await status_msg.edit("❌ Failed to add torrent or metadata taking too long (120s timeout).")
+                    return
             
         # For simplicity, assume the first one found is the one (Limitation: don't run multiple parallel yet)
         torrent = torrents[0] 
@@ -263,63 +292,104 @@ async def magnet_handler(client, message):
                 return
 
         # 3. Upload to Telegram
-        await status_msg.edit("✅ Download Complete. preparing upload...")
+        await status_msg.edit("✅ Download Complete. Preparing upload...")
         
-        # Find the file
+        # Import rename utilities
+        from rename_utils import rename_for_upload
+        from natsort import natsorted
+        
+        # Find all files to upload
         content_path = info.content_path
-        file_to_upload = None
+        files_to_upload = []
         
         if os.path.isfile(content_path):
-            file_to_upload = content_path
+            files_to_upload.append(content_path)
         else:
-            # It's a folder. For simple bot, let's find the biggest file. (Or zip it - complex)
-            # Strategy: Find largest file and upload that.
-            max_size = 0
-            for root, dirs, files in os.walk(content_path):
-                for f in files:
-                    fp = os.path.join(root, f)
-                    sz = os.path.getsize(fp)
-                    if sz > max_size:
-                        max_size = sz
-                        file_to_upload = fp
+            # Walk directory and collect all files
+            for root, dirs, files in sorted(os.walk(content_path)):
+                for file in natsorted(files):
+                    file_path = os.path.join(root, file)
+                    files_to_upload.append(file_path)
         
-        if not file_to_upload:
-            await status_msg.edit("❌ Could not file file to upload.")
+        if not files_to_upload:
+            await status_msg.edit("❌ No files found to upload.")
             ACTIVE_TASKS.remove(t_hash)
             return
-
-        # Upload
-        up_start = time.time()
-        mode = settings.get_setting("upload_mode")
         
-        async def progress_callback(current, total):
+        # Warn if too many files
+        if len(files_to_upload) > 50:
+            await status_msg.edit(f"⚠️ Found {len(files_to_upload)} files. This may take a while and could trigger rate limits. Continue? (Auto-continuing in 10s)")
+            await asyncio.sleep(10)
+        
+        # Upload each file
+        mode = settings.get_setting("upload_mode")
+        uploaded_count = 0
+        
+        for idx, file_to_upload in enumerate(files_to_upload, 1):
             try:
-                 await progress.progress_for_pyrogram(
-                    current, total, status_msg, up_start, "⬆️ <b>Uploading...</b>"
-                ) 
-            except Exception:
-                pass
+                # Skip if cancelled
+                if t_hash not in ACTIVE_TASKS:
+                    return
+                
+                # Clean filename
+                new_path = rename_for_upload(file_to_upload)
+                if new_path != file_to_upload and not os.path.exists(new_path):
+                    os.rename(file_to_upload, new_path)
+                    file_to_upload = new_path
+                
+                file_name = os.path.basename(file_to_upload)
+                file_size = os.path.getsize(file_to_upload)
+                
+                # Skip zero-byte files
+                if file_size == 0:
+                    logger.warning(f"Skipping zero-byte file: {file_name}")
+                    continue
+                
+                # Update status every 3 files to avoid spam
+                if idx % 3 == 1:
+                    await status_msg.edit(f"📤 Uploading {idx}/{len(files_to_upload)}: {file_name}")
+                
+                up_start = time.time()
+                
+                async def progress_callback(current, total):
+                    try:
+                        await progress.progress_for_pyrogram(
+                            current, total, status_msg, up_start, 
+                            f"⬆️ <b>{file_name} ({idx}/{len(files_to_upload)})</b>"
+                        ) 
+                    except Exception:
+                        pass
 
-        try:
-            if mode == "document":
-                await client.send_document(
-                    chat_id=message.chat.id,
-                    document=file_to_upload,
-                    caption=f"✅ {info.name}",
-                    progress=progress_callback
-                )
-            else:
-                 await client.send_video(
-                    chat_id=message.chat.id,
-                    video=file_to_upload,
-                    caption=f"✅ {info.name}",
-                    progress=progress_callback
-                )
-            
-            await status_msg.delete()
-            
-        except Exception as e:
-            await status_msg.edit(f"❌ Upload Failed: {e}")
+                # Upload based on mode
+                if mode == "document":
+                    await client.send_document(
+                        chat_id=message.chat.id,
+                        document=file_to_upload,
+                        caption=f"✅ {file_name}",
+                        progress=progress_callback
+                    )
+                else:
+                    await client.send_video(
+                        chat_id=message.chat.id,
+                        video=file_to_upload,
+                        caption=f"✅ {file_name}",
+                        progress=progress_callback
+                    )
+                
+                uploaded_count += 1
+                
+                #  Rate limiting: 1s between files, 2s every 10 files
+                await asyncio.sleep(1)
+                if uploaded_count % 10 == 0:
+                    logger.info(f"Rate limit pause after {uploaded_count} files")
+                    await asyncio.sleep(2)
+                    
+            except Exception as e:
+                logger.error(f"Failed to upload {file_to_upload}: {e}")
+                continue
+        
+        # Final status
+        await status_msg.edit(f"✅ <b>Upload Complete!</b>\n{uploaded_count} file(s) uploaded.")
     
     finally:
         # Cleanup
