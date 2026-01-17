@@ -29,41 +29,40 @@ def get_progress_bar_string(percentage):
     c_empty = 10 - c_full
     return f"[{'■' * c_full}{'□' * c_empty}]"
 
-async def progress_for_pyrogram(current, total, message, start_time, status_text):
+def get_progress_string(current, total, speed, eta, status_text):
+    percentage = current * 100 / total
+    p_str = get_progress_bar_string(percentage)
+    
+    # KPS Style (approximated)
+    tmp = f"<b>{status_text}</b>\n"
+    tmp += f"<b>{percentage:.2f}%</b> {p_str}\n"
+    tmp += f"<b>Processed:</b> {human_readable_size(current)} of {human_readable_size(total)}\n"
+    tmp += f"<b>Speed:</b> {human_readable_size(speed)}/s | <b>ETA:</b> {eta}"
+    return tmp
+
+async def progress_for_pyrogram(current, total, message, start_time, status_text, reply_markup=None):
     now = time.time()
     msg_id = f"{message.chat.id}_{message.id}"
     
-    # Check if we should update (Time throttling)
     last_time = LAST_UPDATE_TIME.get(msg_id, 0)
     if (now - last_time) < UPDATE_INTERVAL and current != total:
         return
 
     LAST_UPDATE_TIME[msg_id] = now
     
-    percentage = current * 100 / total
-    speed = current / (now - start_time)
-    elapsed_time = round(now - start_time) * 1000
-    time_to_completion = round((total - current) / speed) * 1000
-    estimated_total_time = elapsed_time + time_to_completion
+    speed = current / (now - start_time) if (now - start_time) > 0 else 0
+    time_to_completion = round((total - current) / speed) if speed > 0 else 0
+    eta = time_formatter(time_to_completion)
 
-    elapsed_time = time_formatter(elapsed_time / 1000)
-    estimated_total_time = time_formatter(estimated_total_time / 1000)
-
-    progress = get_progress_bar_string(percentage)
-    
-    tmp = f"{status_text}\n"
-    tmp += f"{progress} {percentage:.2f}%\n"
-    tmp += f"<b>Processed:</b> {human_readable_size(current)} of {human_readable_size(total)}\n"
-    tmp += f"<b>Speed:</b> {human_readable_size(speed)}/s\n"
-    tmp += f"<b>ETA:</b> {estimated_total_time}"
+    text = get_progress_string(current, total, speed, eta, status_text)
 
     try:
-        await message.edit(text=tmp)
+        from pyrogram.errors import MessageNotModified
+        await message.edit(text=text, reply_markup=reply_markup)
+    except MessageNotModified:
+        pass
     except FloodWait as e:
-        # User Rule #1: "The FloodWait Trap" - Catch it and wait
-        # However, for progress bars, we usually just skip this update rather than blocking the thread
         print(f"FloodWait in progress bar: {e.value}s - Skipping update")
-        LAST_UPDATE_TIME[msg_id] = now + e.value # Penalize next update
-    except Exception as e:
-        # Message might be deleted or other error
+        LAST_UPDATE_TIME[msg_id] = now + e.value 
+    except Exception:
         pass

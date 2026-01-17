@@ -142,6 +142,17 @@ async def callback_handler(client, callback):
         await callback.message.delete()
         return
         
+    if data.startswith("cancel_"):
+        t_hash = data.split("_")[1]
+        try:
+            qb.torrents_delete(torrent_hashes=t_hash, delete_files=True)
+            if t_hash in ACTIVE_TASKS:
+                ACTIVE_TASKS.remove(t_hash)
+            await callback.message.edit("❌ <b>Download Cancelled by User.</b>")
+        except Exception as e:
+            await callback.answer(f"Error cancelling: {e}", show_alert=True)
+        return
+
     if data == "set_size_2":
         settings.update_setting("max_file_size", 2 * 1024**3)
     elif data == "set_size_4":
@@ -209,10 +220,12 @@ async def magnet_handler(client, message):
                 
             info = qb.torrents_info(torrent_hashes=t_hash)[0]
             
+            cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_{t_hash}")]])
+
             if info.state in ["metaDL", "allocating", "checkingUP", "checkingDL"]:
                 logger.info(f"[{t_hash[:6]}...] State: {info.state} | Seeds: {info.num_seeds} | Peers: {info.num_leechs} | DL Speed: {info.dlspeed/1024:.2f} KB/s")
                 try:
-                    await status_msg.edit(f"🔄 Preparing: {info.state}...\nSeeds: {info.num_seeds} | Peers: {info.num_leechs}")
+                    await status_msg.edit(f"🔄 Preparing: {info.state}...\nSeeds: {info.num_seeds} | Peers: {info.num_leechs}", reply_markup=cancel_btn)
                 except MessageNotModified:
                     pass
                 await asyncio.sleep(3)
@@ -224,7 +237,8 @@ async def magnet_handler(client, message):
                     info.total_size, 
                     status_msg, 
                     start_time, 
-                    "⬇️ <b>Downloading...</b>"
+                    f"⬇️ <b>Downloading: {info.name}</b>",
+                    reply_markup=cancel_btn
                 )
                 await asyncio.sleep(5) # Rule: "Respect Speed Limits" - 5s wait
                 
