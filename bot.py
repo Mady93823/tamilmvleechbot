@@ -210,8 +210,9 @@ async def magnet_handler(client, message):
             info = qb.torrents_info(torrent_hashes=t_hash)[0]
             
             if info.state in ["metaDL", "allocating", "checkingUP", "checkingDL"]:
+                logger.info(f"[{t_hash[:6]}...] State: {info.state} | Seeds: {info.num_seeds} | Peers: {info.num_leechs} | DL Speed: {info.dlspeed/1024:.2f} KB/s")
                 try:
-                    await status_msg.edit(f"🔄 Preparing: {info.state}...")
+                    await status_msg.edit(f"🔄 Preparing: {info.state}...\nSeeds: {info.num_seeds} | Peers: {info.num_leechs}")
                 except MessageNotModified:
                     pass
                 await asyncio.sleep(3)
