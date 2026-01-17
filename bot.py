@@ -39,6 +39,9 @@ IS_SHUTTING_DOWN = False
 ACTIVE_TASKS = {}
 MAX_CONCURRENT_DOWNLOADS = 5  # Maximum concurrent downloads allowed
 
+# Pending queue for 6th+ downloads: [(magnet_link, message, status_msg), ...]
+PENDING_TASKS = []
+
 # --- qBittorrent Client ---
 # --- qBittorrent Client ---
 def connect_qb():
@@ -176,16 +179,17 @@ async def help_handler(client, message):
         "<b>Basic Commands:</b>\n"
         "/start - Welcome message\n"
         "/help - Show this help message\n"
-        "/settings - Configure bot settings\n\n"
-        "<b>Thumbnail Commands:</b>\n"
+        "/settings - Configure bot settings\n"
+        "/queue - View active downloads\n"
+        "/cancel - Cancel first download\n\n"
+        "<b>Thumbnail:</b>\n"
         "/setthumb - Set custom thumbnail (send with photo)\n\n"
+        "<b>Channels:</b>\n"
+        "/setchannels - Configure upload channels\n"
+        "<i>Example: /setchannels -1001234567 | -1009876543</i>\n\n"
         "<b>Download:</b>\n"
-        "Just send a magnet link to start downloading!\n\n"
-        "<b>Settings Options:</b>\n"
-        "• Max file size (2GB/4GB)\n"
-        "• Upload mode (Document/Video)\n"
-        "• Custom thumbnails\n\n"
-        "<i>All files are auto-cleaned after upload</i>"
+        "Just send a magnet link to start!\n\n"
+        "<i>Max 5 concurrent downloads. 6th+ goes to pending queue.</i>"
     )
     await message.reply(help_text, parse_mode=enums.ParseMode.HTML)
 
@@ -195,7 +199,9 @@ async def queue_handler(client, message):
     if not await check_permissions(message):
         return
     
-    if not ACTIVE_TASKS:
+    total_tasks = len(ACTIVE_TASKS) + len(PENDING_TASKS)
+    
+    if total_tasks == 0:
         await message.reply("📭 <b>Queue is empty</b>\n\n<i>No active downloads at the moment</i>", parse_mode=enums.ParseMode.HTML)
         return
     
@@ -204,12 +210,13 @@ async def queue_handler(client, message):
         all_torrents = qb.torrents_info()
         torrent_dict = {t.hash: t for t in all_torrents}
         
-        queue_text = f"📋 <b>Active Tasks ({len(ACTIVE_TASKS)})</b>\n\n"
+        queue_text = f"📋 <b>Active Tasks ({len(ACTIVE_TASKS)}/{MAX_CONCURRENT_DOWNLOADS})</b>\n\n"
         
-        from progress import get_readable_file_size, get_readable_time
+        from progress import get_readable_file_size, get_readable_time, get_progress_bar
         
+        # Show active downloads
         for idx, (t_hash, task_info) in enumerate(ACTIVE_TASKS.items(), 1):
-            name = task_info.get("name", "Download")[:40]
+            name = task_info.get("name", "Download")[:35]
             
             # Check if torrent exists in qBittorrent
             torrent = torrent_dict.get(t_hash)
@@ -217,55 +224,54 @@ async def queue_handler(client, message):
             if torrent:
                 # Determine state from qBittorrent
                 if torrent.state in ["downloading", "queuedDL", "stalledDL", "metaDL"]:
-                    status_icon = "⏳"
-                    status_text = "Downloading"
+                    status_icon = "⏬"
                     progress = torrent.progress * 100
+                    progress_bar = get_progress_bar(progress)
                     
-                    queue_text += f"{status_icon} <b>Task #{idx}: {status_text}</b>\n"
-                    queue_text += f"📝 {name}...\n"
+                    queue_text += f"{status_icon} <b>#{idx}</b> {name}...\n"
+                    queue_text += f"{progress_bar} {progress:.1f}%\n"
                     queue_text += f"💾 {get_readable_file_size(torrent.downloaded)} / {get_readable_file_size(torrent.size)}\n"
-                    queue_text += f"📊 Progress: {progress:.1f}%\n"
                     
                     speed_str = get_readable_file_size(torrent.dlspeed) + "/s"
                     eta = torrent.eta if torrent.eta > 0 else 0
-                    eta_str = get_readable_time(eta) if eta > 0 else "Unknown"
-                    queue_text += f"⚡ Speed: {speed_str} | ETA: {eta_str}\n"
-                    queue_text += f"🌱 Seeds: {torrent.num_seeds} | Peers: {torrent.num_leechs}\n"
+                    eta_str = get_readable_time(eta) if eta > 0 else "∞"
+                    queue_text += f"⚡ {speed_str} | ⏱ {eta_str}\n"
+                    queue_text += f"🌱 S: {torrent.num_seeds} | P: {torrent.num_leechs}\n"
                     
                 elif torrent.state in ["uploading", "stalledUP", "queuedUP", "pausedUP"]:
-                    # Torrent is seeding, but we're uploading to Telegram
                     status_icon = "📤"
-                    status_text = "Uploading to Telegram"
-                    progress = torrent.progress * 100
+                    progress = 100.0
+                    progress_bar = get_progress_bar(progress)
                     
-                    queue_text += f"{status_icon} <b>Task #{idx}: {status_text}</b>\n"
-                    queue_text += f"📝 {name}...\n"
-                    queue_text += f"💾 Size: {get_readable_file_size(torrent.size)}\n"
-                    queue_text += f"📊 Download: {progress:.1f}% Complete\n"
-                    queue_text += f"<i>Uploading files to Telegram...</i>\n"
+                    queue_text += f"{status_icon} <b>#{idx}</b> {name}...\n"
+                    queue_text += f"{progress_bar} Uploading\n"
+                    queue_text += f"💾 {get_readable_file_size(torrent.size)}\n"
                 else:
-                    status_icon = "⏸️"
-                    status_text = torrent.state
-                    queue_text += f"{status_icon} <b>Task #{idx}: {status_text}</b>\n"
-                    queue_text += f"📝 {name}...\n"
+                    queue_text += f"⏸️ <b>#{idx}</b> {name}...\n"
+                    queue_text += f"<i>State: {torrent.state}</i>\n"
             else:
-                # Torrent not in qBittorrent anymore - likely in upload phase
+                # Torrent not in qBittorrent - uploading to Telegram
                 status_icon = "📤"
-                status_text = "Uploading"
-                queue_text += f"{status_icon} <b>Task #{idx}: {status_text}</b>\n"
-                queue_text += f"📝 {name}...\n"
-                queue_text += f"<i>Files being uploaded to Telegram...</i>\n"
+                queue_text += f"{status_icon} <b>#{idx}</b> {name}...\n"
+                queue_text += f"<i>Uploading to Telegram...</i>\n"
             
             queue_text += "\n"
         
-        # Add individual cancel buttons for each download
-        buttons = []
-        for t_hash, task_info in ACTIVE_TASKS.items():
-            name = task_info.get("name", "Download")[:20]
-            buttons.append([InlineKeyboardButton(f"❌ Cancel: {name}...", callback_data=f"cancel_{t_hash}")])
+        # Show pending tasks
+        if PENDING_TASKS:
+            queue_text += f"\n⏳ <b>Pending ({len(PENDING_TASKS)})</b>\n\n"
+            for idx, (magnet, msg, _) in enumerate(PENDING_TASKS[:5], 1):
+                # Extract name from magnet if possible
+                name = f"Pending #{idx}"
+                queue_text += f"⏸️ {name}\n"
+            if len(PENDING_TASKS) > 5:
+                queue_text += f"<i>... and {len(PENDING_TASKS) - 5} more</i>\n"
         
-        buttons.append([InlineKeyboardButton("🔄 Refresh", callback_data="refresh_queue")])
-        buttons.append([InlineKeyboardButton("✖️ Close", callback_data="close")])
+        # Add buttons
+        buttons = [
+            [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_queue")],
+            [InlineKeyboardButton("✖️ Close", callback_data="close")]
+        ]
         
         await message.reply(queue_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode=enums.ParseMode.HTML)
         
@@ -718,6 +724,14 @@ async def process_download(t_hash, message, status_msg):
             
         if t_hash in ACTIVE_TASKS:
             del ACTIVE_TASKS[t_hash]
+        
+        # Auto-start pending downloads
+        if PENDING_TASKS and len(ACTIVE_TASKS) < MAX_CONCURRENT_DOWNLOADS:
+            magnet_link, msg, status_msg = PENDING_TASKS.pop(0)
+            logger.info(f"Auto-starting pending download. Remaining pending: {len(PENDING_TASKS)}")
+            await status_msg.edit("🔄 <b>Starting download...</b>\n\n<i>Slot became available!</i>", parse_mode=enums.ParseMode.HTML)
+            # Re-trigger magnet handler logic
+            await magnet_handler(app, msg)
 
 @app.on_message(filters.regex(r"^magnet:\?xt=urn:btih:[a-zA-Z0-9]*"))
 async def magnet_handler(client, message):
@@ -730,11 +744,17 @@ async def magnet_handler(client, message):
         return
     
     if len(ACTIVE_TASKS) >= MAX_CONCURRENT_DOWNLOADS:
-        await message.reply(
-            f"⚠️ <b>Queue is full!</b>\n\nCurrently processing {len(ACTIVE_TASKS)}/{MAX_CONCURRENT_DOWNLOADS} downloads.\n"
-            f"Your magnet will be added after one finishes.\n\n<i>Use /queue or /cancel</i>",
+        # Add to pending queue
+        magnet_link = message.text.strip()
+        status_msg = await message.reply(
+            f"⏸️ <b>Queue is full!</b>\n\n"
+            f"Currently: {len(ACTIVE_TASKS)}/{MAX_CONCURRENT_DOWNLOADS} active\n"
+            f"Pending: {len(PENDING_TASKS) + 1}\n\n"
+            f"<i>Your download will start automatically when a slot frees up</i>",
             parse_mode=enums.ParseMode.HTML
         )
+        PENDING_TASKS.append((magnet_link, message, status_msg))
+        logger.info(f"Added to pending queue. Total pending: {len(PENDING_TASKS)}")
         return
 
     magnet_link = message.text.strip()
