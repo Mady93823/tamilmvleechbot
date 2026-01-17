@@ -9,6 +9,7 @@ import shutil
 from dotenv import load_dotenv
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.errors import MessageNotModified
 from qbittorrentapi import Client as qbClient
 import settings
 import progress
@@ -209,7 +210,10 @@ async def magnet_handler(client, message):
             info = qb.torrents_info(torrent_hashes=t_hash)[0]
             
             if info.state in ["metaDL", "allocating", "checkingUP", "checkingDL"]:
-                await status_msg.edit(f"🔄 Preparing: {info.state}...")
+                try:
+                    await status_msg.edit(f"🔄 Preparing: {info.state}...")
+                except MessageNotModified:
+                    pass
                 await asyncio.sleep(3)
                 continue
                 
