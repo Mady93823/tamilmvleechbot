@@ -316,7 +316,8 @@ async def callback_handler(client, callback):
         try:
             qb.torrents_delete(torrent_hashes=t_hash, delete_files=True)
             if t_hash in ACTIVE_TASKS:
-                ACTIVE_TASKS.remove(t_hash)
+                if t_hash in ACTIVE_TASKS:
+                    del ACTIVE_TASKS[t_hash]
             await callback.message.edit("❌ <b>Download Cancelled by User.</b>")
         except Exception as e:
             await callback.answer(f"Error cancelling: {e}", show_alert=True)
@@ -441,7 +442,8 @@ async def magnet_handler(client, message):
                 info_list = qb.torrents_info(torrent_hashes=t_hash)
                 if not info_list:
                      # Torrent removed externally or cancelled
-                     if t_hash in ACTIVE_TASKS: ACTIVE_TASKS.remove(t_hash)
+                     if t_hash in ACTIVE_TASKS:
+                         del ACTIVE_TASKS[t_hash]
                      return
                 info = info_list[0]
             except Exception:
@@ -475,7 +477,8 @@ async def magnet_handler(client, message):
                 
             elif info.state in ["error", "missingFiles"]:
                 await status_msg.edit("❌ Download Error in qBittorrent.")
-                ACTIVE_TASKS.remove(t_hash)
+                if t_hash in ACTIVE_TASKS:
+                    del ACTIVE_TASKS[t_hash]
                 return
 
         # 3. Upload to Telegram
@@ -500,7 +503,8 @@ async def magnet_handler(client, message):
         
         if not files_to_upload:
             await status_msg.edit("❌ No files found to upload.")
-            ACTIVE_TASKS.remove(t_hash)
+            if t_hash in ACTIVE_TASKS:
+                del ACTIVE_TASKS[t_hash]
             return
         
         # Warn if too many files
