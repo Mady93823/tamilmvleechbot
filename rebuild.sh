@@ -6,8 +6,8 @@ set -e
 echo "🔄 Pulling latest code..."
 git pull
 
-echo "🛑 Stopping containers..."
-docker-compose down
+echo "🛑 Stopping containers and wiping old volumes (removes bans)..."
+docker-compose down -v
 
 echo "🧹 Cleaning up old images..."
 docker image prune -f
