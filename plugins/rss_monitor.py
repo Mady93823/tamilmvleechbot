@@ -173,10 +173,18 @@ class RSSMonitor:
                                 "title": title
                             })
             
-            # Limit to last 10 to avoid flooding, processing oldest first
+            # Limit to top 10 (Newest) to avoid flooding
             if len(new_topics) > 10:
-                logger.info(f"RSS: Found {len(new_topics)} new topics, limiting to last 10.")
-                new_topics = new_topics[-10:]
+                logger.info(f"RSS: Found {len(new_topics)} new topics. Keeping top 10 and skipping the rest.")
+                
+                to_process = new_topics[:10]
+                to_skip = new_topics[10:]
+                
+                # Mark skipped as processed so we don't fetch them again
+                for topic in to_skip:
+                    self.mark_as_processed(topic['topic_id'], topic['title'])
+                
+                new_topics = to_process
             
             return new_topics
 

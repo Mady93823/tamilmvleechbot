@@ -515,6 +515,8 @@ async def callback_handler(client, callback):
 async def process_download(t_hash, message, status_msg):
     """Process download independently (async task)"""
     start_time = time.time()
+    stalled_start_time = None
+    DEAD_TORRENT_TIMEOUT = 600  # 10 minutes
     
     try:
         while True:
@@ -528,6 +530,31 @@ async def process_download(t_hash, message, status_msg):
                         del ACTIVE_TASKS[t_hash]
                     return
                 info = info_list[0]
+                
+                # --- Dead Torrent Check ---
+                # Consider dead if: stalledDL, metaDL, or downloading with 0 speed/seeds
+                is_stalled = (info.state in ["stalledDL", "metaDL"]) or \
+                             (info.state == "downloading" and info.dlspeed == 0 and info.num_seeds == 0)
+
+                if is_stalled:
+                    if stalled_start_time is None:
+                        stalled_start_time = time.time()
+                    elif (time.time() - stalled_start_time) > DEAD_TORRENT_TIMEOUT:
+                        logger.info(f"Killing dead torrent: {info.name}")
+                        await status_msg.edit(
+                            f"💀 <b>Dead Torrent Removed</b>\n\n"
+                            f"<i>Stalled for >{DEAD_TORRENT_TIMEOUT//60} mins with no activity.</i>",
+                            parse_mode=enums.ParseMode.HTML
+                        )
+                        qb.torrents_delete(torrent_hashes=t_hash, delete_files=True)
+                        if t_hash in ACTIVE_TASKS:
+                            del ACTIVE_TASKS[t_hash]
+                        return
+                else:
+                    # Reset if we see activity
+                    stalled_start_time = None
+                # --------------------------
+
             except Exception:
                 await asyncio.sleep(3)
                 continue
