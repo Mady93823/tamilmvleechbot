@@ -117,6 +117,7 @@ class RSSMonitor:
         try:
             soup = BeautifulSoup(response.text, 'html.parser')
             new_topics = []
+            seen_in_loop = set()
             
             # --- Strategy 1: Target "RECENTLY ADDED" Widget specifically ---
             # This is usually an 'ipsWidget' or similar container.
@@ -156,7 +157,8 @@ class RSSMonitor:
                 if '/forums/topic/' in href:
                     topic_id = self.get_topic_id(href)
                     
-                    if topic_id and topic_id not in self.seen_topics:
+                    if topic_id and topic_id not in self.seen_topics and topic_id not in seen_in_loop:
+                        seen_in_loop.add(topic_id)
                         # Double check DB
                         if self.collection is not None and not self.collection.find_one({"topic_id": topic_id}):
                             
@@ -170,8 +172,11 @@ class RSSMonitor:
                                 "url": href,
                                 "title": title
                             })
-                            # Add to seen immediately
-                            self.seen_topics.add(topic_id)
+            
+            # Limit to last 10 to avoid flooding, processing oldest first
+            if len(new_topics) > 10:
+                logger.info(f"RSS: Found {len(new_topics)} new topics, limiting to last 10.")
+                new_topics = new_topics[-10:]
             
             return new_topics
 
