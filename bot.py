@@ -9,7 +9,7 @@ import shutil
 from dotenv import load_dotenv
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from pyrogram.errors import MessageNotModified
+from pyrogram.errors import MessageNotModified, FloodWait
 from qbittorrentapi import Client as qbClient
 import settings
 import progress
@@ -697,15 +697,19 @@ async def process_download(t_hash, message, status_msg):
                         if channel_idx < len(upload_channels):
                             await asyncio.sleep(2)
                     
+                    except FloodWait as e:
+                        logger.warning(f"Upload FloodWait: Sleeping {e.value}s")
+                        await asyncio.sleep(e.value + 10)
+                        # Retry uploading to this channel could be added here, but complex in loop
                     except Exception as e:
                         logger.error(f"Failed to upload {file_name} to channel {channel_id}: {e}")
                         continue
                 
                 uploaded_count += 1
-                await asyncio.sleep(1)
-                if uploaded_count % 10 == 0:
+                await asyncio.sleep(3)  # Increased from 1s
+                if uploaded_count % 5 == 0:  # Every 5 files (was 10)
                     logger.info(f"Rate limit pause after {uploaded_count} files")
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(10)  # Sleep 10s (was 2s)
                     
             except Exception as e:
                 logger.error(f"Failed to upload {file_to_upload}: {e}")
@@ -948,11 +952,15 @@ async def rss_worker(client):
                         # Mark as processed
                         rss_monitor.monitor.mark_as_processed(topic_id, topic_title)
                         
-                        # Wait a bit between posts
-                        await asyncio.sleep(10)
+                        # Wait a bit between posts (Safe limit to avoid FloodWait)
+                        await asyncio.sleep(60)
                         
+                    except FloodWait as e:
+                        logger.warning(f"RSS FloodWait: Sleeping for {e.value} seconds")
+                        await asyncio.sleep(e.value + 15)
                     except Exception as e:
                         logger.error(f"RSS Process Error for {topic_title}: {e}")
+                        await asyncio.sleep(5)
             
             # Wait for next check
             await asyncio.sleep(rss_monitor.CHECK_INTERVAL)

@@ -4,7 +4,7 @@ from pyrogram.errors import FloodWait
 
 # Simple lock to preventing spamming edits
 LAST_UPDATE_TIME = {}
-UPDATE_INTERVAL = 5 # Seconds between edits (User Rule: "Respect Speed Limits")
+UPDATE_INTERVAL = 8 # Seconds between edits (User Rule: "Respect Speed Limits")
 
 def get_readable_file_size(size_bytes):
     """Convert bytes to human readable format"""

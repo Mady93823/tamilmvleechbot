@@ -6,6 +6,8 @@ import settings
 
 logger = logging.getLogger(__name__)
 
+from pyrogram.errors import FloodWait
+
 async def process_tamilmv_link(client, message, url, magnet_handler):
     """Process TamilMV post link - scrape and queue magnets"""
     status_msg = await message.reply("🔄 <b>Scraping TamilMV post...</b>", parse_mode=enums.ParseMode.HTML)
@@ -58,10 +60,13 @@ async def process_tamilmv_link(client, message, url, magnet_handler):
                 await magnet_handler(client, fake_msg)
                 added_count += 1
                 
-                # 1s delay between adding (Telegram safety)
+                # Safe delay between adding (Telegram safety)
                 if idx < len(filtered):
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(3)
             
+            except FloodWait as e:
+                logger.warning(f"FloodWait adding magnet: Sleeping {e.value}s")
+                await asyncio.sleep(e.value + 5)
             except Exception as e:
                 logger.error(f"Error adding magnet {idx}: {e}")
                 continue
