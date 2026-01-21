@@ -158,7 +158,7 @@ class RSSMonitor:
                     
                     if topic_id and topic_id not in self.seen_topics:
                         # Double check DB
-                        if self.collection and not self.collection.find_one({"topic_id": topic_id}):
+                        if self.collection is not None and not self.collection.find_one({"topic_id": topic_id}):
                             
                             title = link.get_text(strip=True)
                             if not title:
@@ -181,7 +181,7 @@ class RSSMonitor:
 
     def mark_as_processed(self, topic_id, title):
         """Save to DB"""
-        if self.collection:
+        if self.collection is not None:
             try:
                 import time
                 self.collection.insert_one({
