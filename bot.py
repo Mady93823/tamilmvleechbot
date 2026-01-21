@@ -16,7 +16,7 @@ import progress
 import thumb_utils
 import rename_utils
 import channel_utils
-from plugins import tamilmv_scraper
+from plugins import tamilmv_scraper, rss_monitor
 
 # Load Config
 load_dotenv('config.env')
@@ -856,6 +856,84 @@ def cleanup_pid():
     except:
         pass
 
+async def rss_worker(client):
+    """Background task to check for new posts"""
+    logger.info("Starting RSS Monitor...")
+    # Wait for bot to be ready
+    await asyncio.sleep(10)
+    
+    while not IS_SHUTTING_DOWN:
+        try:
+            # Run blocking scrape in thread
+            new_topics = await asyncio.to_thread(rss_monitor.monitor.fetch_recent_topics)
+            
+            if new_topics:
+                logger.info(f"RSS: Found {len(new_topics)} new topics")
+                
+                for topic in reversed(new_topics):  # Process oldest to newest
+                    if IS_SHUTTING_DOWN:
+                        break
+                        
+                    topic_url = topic["url"]
+                    topic_title = topic["title"]
+                    topic_id = topic["topic_id"]
+                    
+                    logger.info(f"RSS: Processing {topic_title}")
+                    
+                    try:
+                        # Notify owner
+                        if OWNER_ID:
+                            await client.send_message(
+                                chat_id=OWNER_ID,
+                                text=f"📰 <b>New Post Found!</b>\n\n<a href='{topic_url}'>{topic_title}</a>\n\n<i>Processing...</i>",
+                                parse_mode=enums.ParseMode.HTML,
+                                disable_web_page_preview=True
+                            )
+                        
+                        # Mock Message for handler
+                        class MockMessage:
+                            def __init__(self, client, chat_id):
+                                self.client = client
+                                self.chat = type('obj', (object,), {'id': chat_id})
+                                self.from_user = type('obj', (object,), {'id': chat_id})
+                                self.text = topic_url
+                                
+                            async def reply(self, text, parse_mode=None, reply_markup=None):
+                                return await self.client.send_message(
+                                    self.chat.id, 
+                                    text, 
+                                    parse_mode=parse_mode, 
+                                    reply_markup=reply_markup
+                                )
+                        
+                        # Use OWNER_ID or first channel
+                        target_chat = OWNER_ID
+                        if not target_chat:
+                            logger.warning("RSS: No OWNER_ID set, skipping download")
+                            continue
+                            
+                        mock_msg = MockMessage(client, target_chat)
+                        
+                        # Process
+                        from tamilmv_handler import process_tamilmv_link
+                        await process_tamilmv_link(client, mock_msg, topic_url, magnet_handler)
+                        
+                        # Mark as processed
+                        rss_monitor.monitor.mark_as_processed(topic_id, topic_title)
+                        
+                        # Wait a bit between posts
+                        await asyncio.sleep(10)
+                        
+                    except Exception as e:
+                        logger.error(f"RSS Process Error for {topic_title}: {e}")
+            
+            # Wait for next check
+            await asyncio.sleep(rss_monitor.CHECK_INTERVAL)
+            
+        except Exception as e:
+            logger.error(f"RSS Loop Error: {e}")
+            await asyncio.sleep(60)
+
 if __name__ == "__main__":
     # Write PID
     try:
@@ -870,6 +948,10 @@ if __name__ == "__main__":
         f.write(str(os.getpid()))
         
     try:
+        # Start RSS worker on startup
+        loop = asyncio.get_event_loop()
+        loop.create_task(rss_worker(app))
+        
         app.run()
     finally:
         cleanup_pid()
