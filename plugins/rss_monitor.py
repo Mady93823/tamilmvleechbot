@@ -3,9 +3,13 @@ import asyncio
 import logging
 import os
 import requests
+import urllib3
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
 from dotenv import load_dotenv
+
+# Suppress InsecureRequestWarning
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 load_dotenv('config.env')
 
@@ -157,16 +161,44 @@ class RSSMonitor:
                 if '/forums/topic/' in href:
                     topic_id = self.get_topic_id(href)
                     
-                    if topic_id and topic_id not in self.seen_topics and topic_id not in seen_in_loop:
+                    if topic_id:
+                        # Prevent duplicate processing in same loop
+                        if topic_id in seen_in_loop:
+                            continue
                         seen_in_loop.add(topic_id)
-                        # Double check DB
-                        if self.collection is not None and not self.collection.find_one({"topic_id": topic_id}):
+                        
+                        # Get Title
+                        title = link.get_text(strip=True)
+                        if not title:
+                            title = link.get('title', 'Unknown Topic')
                             
-                            title = link.get_text(strip=True)
-                            if not title:
-                                # Sometimes title is in a child element or title attribute
-                                title = link.get('title', 'Unknown Topic')
+                        # Logic for New vs Updated Topics
+                        is_new = False
+                        
+                        if topic_id not in self.seen_topics:
+                            # 1. Not in memory -> Check DB
+                            if self.collection is not None:
+                                doc = self.collection.find_one({"topic_id": topic_id})
+                                if not doc:
+                                    is_new = True
+                                else:
+                                    # 2. In DB -> Check if Title Changed (Update detection)
+                                    # Use fuzzy check or direct equality. Title often changes for series.
+                                    # Clean titles to avoid minor formatting diffs
+                                    old_title = doc.get("title", "")
+                                    if old_title != title:
+                                        logger.info(f"RSS: Topic Updated! {topic_id} | Old: {old_title} -> New: {title}")
+                                        is_new = True
+                                    else:
+                                        self.seen_topics.add(topic_id) # Sync memory
+                        else:
+                            # 3. In memory -> Check if we need to re-validate title from DB?
+                            # Usually memory is up to date, but to be safe for updates:
+                            # We can skip this optimization if we want aggressive update checking.
+                            # But for now, let's assume seen_topics means "Seen with current title"
+                            pass
                             
+                        if is_new:
                             new_topics.append({
                                 "topic_id": topic_id,
                                 "url": href,
@@ -193,15 +225,20 @@ class RSSMonitor:
             return []
 
     def mark_as_processed(self, topic_id, title):
-        """Save to DB"""
+        """Save to DB (Update if exists)"""
         if self.collection is not None:
             try:
                 import time
-                self.collection.insert_one({
-                    "topic_id": topic_id,
-                    "title": title,
-                    "timestamp": time.time()
-                })
+                self.collection.update_one(
+                    {"topic_id": topic_id},
+                    {
+                        "$set": {
+                            "title": title,
+                            "timestamp": time.time()
+                        }
+                    },
+                    upsert=True
+                )
                 self.seen_topics.add(topic_id)
             except Exception as e:
                 logger.error(f"Error saving to RSS history: {e}")

@@ -44,8 +44,21 @@ async def process_tamilmv_link(client, message, url, magnet_handler):
         
         # Queue all filtered magnets with 1s delay
         added_count = 0
+        skipped_count = 0
+        
         for idx, magnet_info in enumerate(filtered, 1):
             try:
+                # Check duplicate history
+                magnet_link = magnet_info['url']
+                # Extract hash if possible (xt=urn:btih:HASH)
+                import re
+                hash_match = re.search(r'xt=urn:btih:([a-zA-Z0-9]+)', magnet_link)
+                magnet_hash = hash_match.group(1).lower() if hash_match else magnet_link
+                
+                if settings.is_magnet_seen(magnet_hash):
+                    skipped_count += 1
+                    continue
+                
                 # Create a fake message object with magnet link text
                 class FakeMagnetMessage:
                     def __init__(self, text, original_msg):
@@ -54,10 +67,14 @@ async def process_tamilmv_link(client, message, url, magnet_handler):
                         self.chat = original_msg.chat
                         self.reply = original_msg.reply
                 
-                fake_msg = FakeMagnetMessage(magnet_info['url'], message)
+                fake_msg = FakeMagnetMessage(magnet_link, message)
                 
                 # Trigger magnet handler
                 await magnet_handler(client, fake_msg)
+                
+                # Save to history
+                settings.add_seen_magnet(magnet_hash, magnet_info.get('name', 'Unknown'))
+                
                 added_count += 1
                 
                 # Safe delay between adding (Telegram safety)
@@ -74,7 +91,8 @@ async def process_tamilmv_link(client, message, url, magnet_handler):
         # Final summary
         final_summary = (
             f"✅ <b>Processing Complete!</b>\n\n"
-            f"📥 Added {added_count} magnets to queue\n"
+            f"📥 Added: {added_count}\n"
+            f"⏭️ Skipped (Already Downloaded): {skipped_count}\n"
             f"📊 Check /queue to see progress"
         )
         await status_msg.edit(final_summary, parse_mode=enums.ParseMode.HTML)

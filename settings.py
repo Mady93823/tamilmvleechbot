@@ -114,3 +114,30 @@ try:
 except Exception as e:
     print(f"Warning: MongoDB initialization failed: {e}")
     print("Bot will use default settings")
+
+# --- Magnet History Functions ---
+def is_magnet_seen(magnet_hash):
+    """Check if magnet hash exists in history"""
+    if not _db_client:
+        return False
+    try:
+        db = _db_client[DATABASE_NAME]
+        history = db["magnet_history"]
+        return history.find_one({"hash": magnet_hash}) is not None
+    except Exception:
+        return False
+
+def add_seen_magnet(magnet_hash, name):
+    """Add magnet to history"""
+    if not _db_client:
+        return
+    try:
+        db = _db_client[DATABASE_NAME]
+        history = db["magnet_history"]
+        history.insert_one({
+            "hash": magnet_hash,
+            "name": name,
+            "timestamp": os.time() if hasattr(os, 'time') else __import__('time').time()
+        })
+    except Exception as e:
+        print(f"Failed to save magnet history: {e}")

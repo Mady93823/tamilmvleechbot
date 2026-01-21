@@ -85,6 +85,22 @@ async def check_permissions(message):
     await message.reply("⛔ You are not authorized to use this bot.")
     return False
 
+async def safe_edit(message, text, parse_mode=enums.ParseMode.HTML, reply_markup=None):
+    """Safely edit message with FloodWait handling"""
+    try:
+        await message.edit(text, parse_mode=parse_mode, reply_markup=reply_markup)
+    except FloodWait as e:
+        logger.warning(f"FloodWait editing message: Sleeping {e.value}s")
+        await asyncio.sleep(e.value + 2)
+        try:
+            await message.edit(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        except Exception:
+            pass
+    except MessageNotModified:
+        pass
+    except Exception as e:
+        logger.error(f"Error editing message: {e}")
+
 # --- Signal Handling (Graceful Shutdown) ---
 def signal_handler(signum, frame):
     global IS_SHUTTING_DOWN
@@ -541,7 +557,8 @@ async def process_download(t_hash, message, status_msg):
                         stalled_start_time = time.time()
                     elif (time.time() - stalled_start_time) > DEAD_TORRENT_TIMEOUT:
                         logger.info(f"Killing dead torrent: {info.name}")
-                        await status_msg.edit(
+                        await safe_edit(
+                            status_msg,
                             f"💀 <b>Dead Torrent Removed</b>\n\n"
                             f"<i>Stalled for >{DEAD_TORRENT_TIMEOUT//60} mins with no activity.</i>",
                             parse_mode=enums.ParseMode.HTML
@@ -562,13 +579,11 @@ async def process_download(t_hash, message, status_msg):
             cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_{t_hash}")]])
             
             if info.state in ["metaDL", "checkingResumeData"]:
-                try:
-                    await status_msg.edit(
-                        f"🔄 Preparing: {info.state}...\nSeeds: {info.num_seeds} | Peers: {info.num_leechs}",
-                        reply_markup=cancel_btn
-                    )
-                except MessageNotModified:
-                    pass
+                await safe_edit(
+                    status_msg,
+                    f"🔄 Preparing: {info.state}...\nSeeds: {info.num_seeds} | Peers: {info.num_leechs}",
+                    reply_markup=cancel_btn
+                )
                 await asyncio.sleep(3)
                 continue
                 
@@ -587,13 +602,13 @@ async def process_download(t_hash, message, status_msg):
                 break
                 
             elif info.state in ["error", "missingFiles"]:
-                await status_msg.edit("❌ Download Error in qBittorrent.")
+                await safe_edit(status_msg, "❌ Download Error in qBittorrent.")
                 if t_hash in ACTIVE_TASKS:
                     del ACTIVE_TASKS[t_hash]
                 return
 
         # Upload to Telegram
-        await status_msg.edit("✅ Download Complete. Preparing upload...")
+        await safe_edit(status_msg, "✅ Download Complete. Preparing upload...")
         
         from rename_utils import rename_for_upload
         from natsort import natsorted
@@ -610,13 +625,13 @@ async def process_download(t_hash, message, status_msg):
                     files_to_upload.append(file_path)
         
         if not files_to_upload:
-            await status_msg.edit("❌ No files found to upload.")
+            await safe_edit(status_msg, "❌ No files found to upload.")
             if t_hash in ACTIVE_TASKS:
                 del ACTIVE_TASKS[t_hash]
             return
         
         if len(files_to_upload) > 50:
-            await status_msg.edit(f"⚠️ Found {len(files_to_upload)} files. This may take a while. Auto-continuing in 10s...")
+            await safe_edit(status_msg, f"⚠️ Found {len(files_to_upload)} files. This may take a while. Auto-continuing in 10s...")
             await asyncio.sleep(10)
         
         mode = settings.get_setting("upload_mode")
@@ -630,7 +645,8 @@ async def process_download(t_hash, message, status_msg):
         
         total_uploads = len(files_to_upload) * len(upload_channels)
         if total_uploads > 100:
-            await status_msg.edit(
+            await safe_edit(
+                status_msg,
                 f"⚠️ <b>Large upload!</b>\n\n{len(files_to_upload)} files × {len(upload_channels)} channels = {total_uploads} uploads\n\nAuto-continuing in 10s...",
                 parse_mode=enums.ParseMode.HTML
             )
@@ -654,7 +670,7 @@ async def process_download(t_hash, message, status_msg):
                     continue
                 
                 if idx % 3 == 1 or len(files_to_upload) == 1:
-                    await status_msg.edit(f"📤 Uploading {idx}/{len(files_to_upload)}: {file_name[:30]}...")
+                    await safe_edit(status_msg, f"📤 Uploading {idx}/{len(files_to_upload)}: {file_name[:30]}...")
                 
                 up_start = time.time()
                 
@@ -672,7 +688,8 @@ async def process_download(t_hash, message, status_msg):
                         channel_id = int(channel_id) if isinstance(channel_id, str) else channel_id
                         
                         if len(upload_channels) > 1:
-                            await status_msg.edit(
+                            await safe_edit(
+                                status_msg,
                                 f"📤 File {idx}/{len(files_to_upload)} → Channel {channel_idx}/{len(upload_channels)}\n{file_name[:40]}...",
                                 parse_mode=enums.ParseMode.HTML
                             )
@@ -726,7 +743,7 @@ async def process_download(t_hash, message, status_msg):
             f"• Total size: {size_str}\n\n"
             f"<i>All files have been cleaned up</i>"
         )
-        await status_msg.edit(completion_text, parse_mode=enums.ParseMode.HTML)
+        await safe_edit(status_msg, completion_text, parse_mode=enums.ParseMode.HTML)
     
     finally:
         try:
@@ -761,9 +778,9 @@ async def process_download(t_hash, message, status_msg):
         if PENDING_TASKS and len(ACTIVE_TASKS) < MAX_CONCURRENT_DOWNLOADS:
             magnet_link, msg, status_msg = PENDING_TASKS.pop(0)
             logger.info(f"Auto-starting pending download. Remaining pending: {len(PENDING_TASKS)}")
-            await status_msg.edit("🔄 <b>Starting download...</b>\n\n<i>Slot became available!</i>", parse_mode=enums.ParseMode.HTML)
+            await safe_edit(status_msg, "🔄 <b>Starting download...</b>\n\n<i>Slot became available!</i>", parse_mode=enums.ParseMode.HTML)
             # Re-trigger magnet handler logic
-            await magnet_handler(app, msg)
+            await magnet_handler(app, msg, existing_status_msg=status_msg)
 
 @app.on_message(filters.text & filters.private)
 async def text_handler(client, message):
@@ -785,10 +802,13 @@ async def text_handler(client, message):
         return
 
 @app.on_message(filters.regex(r"^magnet:\?xt=urn:btih:[a-zA-Z0-9]*"))
-async def magnet_handler(client, message):
+async def magnet_handler(client, message, existing_status_msg=None):
     """Non-blocking magnet handler - spawns async tasks"""
     if IS_SHUTTING_DOWN:
-        await message.reply("⚠️ Bot is restarting. Please wait.")
+        if existing_status_msg:
+             await safe_edit(existing_status_msg, "⚠️ Bot is restarting. Please wait.")
+        else:
+             await message.reply("⚠️ Bot is restarting. Please wait.")
         return
 
     if not await check_permissions(message):
@@ -797,19 +817,50 @@ async def magnet_handler(client, message):
     if len(ACTIVE_TASKS) >= MAX_CONCURRENT_DOWNLOADS:
         # Add to pending queue
         magnet_link = message.text.strip()
-        status_msg = await message.reply(
-            f"⏸️ <b>Queue is full!</b>\n\n"
-            f"Currently: {len(ACTIVE_TASKS)}/{MAX_CONCURRENT_DOWNLOADS} active\n"
-            f"Pending: {len(PENDING_TASKS) + 1}\n\n"
-            f"<i>Your download will start automatically when a slot frees up</i>",
-            parse_mode=enums.ParseMode.HTML
-        )
+        if existing_status_msg:
+             status_msg = existing_status_msg
+             await safe_edit(status_msg, 
+                f"⏸️ <b>Queue is full!</b>\n\n"
+                f"Currently: {len(ACTIVE_TASKS)}/{MAX_CONCURRENT_DOWNLOADS} active\n"
+                f"Pending: {len(PENDING_TASKS) + 1}\n\n"
+                f"<i>Your download will start automatically when a slot frees up</i>",
+                parse_mode=enums.ParseMode.HTML
+             )
+        else:
+            status_msg = await message.reply(
+                f"⏸️ <b>Queue is full!</b>\n\n"
+                f"Currently: {len(ACTIVE_TASKS)}/{MAX_CONCURRENT_DOWNLOADS} active\n"
+                f"Pending: {len(PENDING_TASKS) + 1}\n\n"
+                f"<i>Your download will start automatically when a slot frees up</i>",
+                parse_mode=enums.ParseMode.HTML
+            )
+        # Avoid adding to pending if it's already popped from pending (recursive case?)
+        # Actually, if we are calling from 'finally', we popped it.
+        # But here we append it back?
+        # WAIT. If we call magnet_handler from finally, and queue is FULL (race condition?), it puts it back in pending.
+        # But we checked len < MAX before calling.
+        # So this block shouldn't be hit if called from finally with correct check.
+        
+        # However, we should be careful.
+        # If we pass existing_status_msg, we assume it's being re-processed or handled.
+        
+        # If it IS pending logic (queue full), we append (magnet, message, status_msg).
+        # If we already have status_msg, we use it.
         PENDING_TASKS.append((magnet_link, message, status_msg))
         logger.info(f"Added to pending queue. Total pending: {len(PENDING_TASKS)}")
         return
 
     magnet_link = message.text.strip()
-    status_msg = await message.reply("🔄 Adding magnet...")
+    if existing_status_msg:
+        status_msg = existing_status_msg
+        await safe_edit(status_msg, "🔄 Adding magnet...")
+    else:
+        try:
+            status_msg = await message.reply("🔄 Adding magnet...")
+        except FloodWait as e:
+            logger.warning(f"FloodWait replying: Sleeping {e.value}s")
+            await asyncio.sleep(e.value + 5)
+            status_msg = await message.reply("🔄 Adding magnet...")
 
     try:
         # Get list of torrents BEFORE adding
@@ -838,14 +889,14 @@ async def magnet_handler(client, message):
             await asyncio.sleep(3)
         
         if not new_torrent:
-            await status_msg.edit("❌ Failed to add torrent or metadata timeout (120s).")
+            await safe_edit(status_msg, "❌ Failed to add torrent or metadata timeout (120s).")
             return
         
         t_hash = new_torrent.hash
         
         # Check for duplicate
         if t_hash in ACTIVE_TASKS:
-            await status_msg.edit("⚠️ <b>Duplicate detected!</b>\n\n<i>This torrent is already downloading</i>", parse_mode=enums.ParseMode.HTML)
+            await safe_edit(status_msg, "⚠️ <b>Duplicate detected!</b>\n\n<i>This torrent is already downloading</i>", parse_mode=enums.ParseMode.HTML)
             return
         
         max_file_size = settings.get_setting("max_file_size")
@@ -854,7 +905,8 @@ async def magnet_handler(client, message):
         if torrent_size > max_file_size:
             qb.torrents_delete(torrent_hashes=t_hash, delete_files=True)
             from progress import get_readable_file_size
-            await status_msg.edit(
+            await safe_edit(
+                status_msg,
                 f"❌ <b>File too big!</b>\n\nSize: {get_readable_file_size(torrent_size)}\n"
                 f"Limit: {get_readable_file_size(max_file_size)}\n\n<i>Change limit in /settings</i>",
                 parse_mode=enums.ParseMode.HTML
@@ -862,7 +914,7 @@ async def magnet_handler(client, message):
             return
 
     except Exception as e:
-        await status_msg.edit(f"❌ Error adding torrent: {e}")
+        await safe_edit(status_msg, f"❌ Error adding torrent: {e}")
         return
     
     # Track download
