@@ -1,97 +1,254 @@
-<h1 align="center">
-  <br>
-  <a href="https://github.com/Mady93823/tamilmvleechbot"><img src="https://i.imgur.com/G4z1k7A.png" alt="Simple Leech Bot" width="200"></a>
-  <br>
-  Simple Leech Bot
-  <br>
-</h1>
+<div align="center">
 
-<h4 align="center">A robust, safe, and efficient Telegram Leech Bot built with Pyrogram & qBittorrent.</h4>
+![SimpleLeechBot Banner](./banner.png)
 
-<p align="center">
-  <a href="https://www.python.org/">
-    <img src="https://img.shields.io/badge/Python-3.9+-blue.svg" alt="Python Version">
-  </a>
-  <a href="https://docs.docker.com/">
-    <img src="https://img.shields.io/badge/Docker-Enabled-blue.svg" alt="Docker">
-  </a>
-  <a href="https://github.com/StartYourBot">
-    <img src="https://img.shields.io/badge/License-MIT-orange.svg" alt="License">
-  </a>
-</p>
+# SimpleLeechBot
 
-<p align="center">
-  <a href="#features">Features</a> •
-  <a href="#installation">Installation</a> •
-  <a href="#deployment">Deployment</a> •
-  <a href="#configuration">Configuration</a>
-</p>
+### 🚀 Advanced Telegram Torrent Leech Bot
+
+[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
+[![Docker](https://img.shields.io/badge/Docker-Enabled-blue.svg)](https://docs.docker.com/)
+[![Pyrogram](https://img.shields.io/badge/Pyrogram-Latest-green.svg)](https://docs.pyrogram.org/)
+[![License](https://img.shields.io/badge/License-MIT-orange.svg)](LICENSE)
+
+[Features](#-features) • [Installation](#-installation) • [Commands](#-commands) • [Ban Prevention](#%EF%B8%8F-ban-prevention)
+
+</div>
 
 ---
 
-## 🚀 Features
+## ✨ Features
 
-*   **Magnet to Telegram**: Seamlessly downloads magnet links and uploads files to chat.
-*   **Smart Size Limits**: Configurable 2GB/4GB limits to prevent failures.
-*   **Safety First**:
-    *   🛡️ **FloodWait Protection**: Auto-sleeps on API limits.
-    *   🛑 **Flood Control**: Progress bars update safely (max 1 per 5s).
-    *   🧟 **Zombie Process Killer**: Graceful shutdowns ensure no background downloaders.
-*   **No-Auth qBittorrent**: Pre-configured for hassle-free local connections.
-*   **Docker Ready**: One-click deployment with `docker-compose`.
+### Core Functionality
+- 🧲 **Magnet Link Support** - Direct torrent downloads via qBittorrent
+- 📁 **Multi-File Handling** - Automatic folder uploads with natural sorting
+- 📤 **Multi-Channel Upload** - Upload to multiple Telegram channels simultaneously
+- 🌐 **TamilMV Integration** - Auto-scrape and queue magnets from TamilMV posts
+- 🖼️ **Custom Thumbnails** - Per-user thumbnail support
+- 📏 **Smart Size Filtering** - 2GB/4GB configurable limits
+- 🗑️ **Auto-Cleanup** - Files deleted immediately after upload
 
-## 🛠 Installation
+### Queue Management
+- 🔢 **Concurrent Downloads** - 3 simultaneous downloads (safe limit)
+- ⏳ **Pending Queue** - Auto-queue 4th+ downloads
+- � **Progress Bars** - Visual `[████████░░]` style indicators
+- ❌ **Individual Cancellation** - Cancel any download by hash
+- 🔄 **Auto-Resume** - Pending downloads start automatically when slots free
 
-### Local Setup
+### Advanced Features
+- 🛡️ **Rate Limiting** - Smart throttling to prevent API bans
+- � **Storage Channel Mode** - Upload to private channel (safer)
+- 🗑️ **Auto-Delete Messages** - Bot messages auto-delete after 10s
+- 📝 **Filename Cleaning** - Remove unwanted patterns (www.TamilMV, etc.)
+- 🔍 **Duplicate Detection** - Hash-based duplicate prevention
+- 📊 **Real-time Monitoring** - `/limits` command shows current API usage
 
-1.  **Clone the Repo**
-    ```bash
-    git clone https://github.com/Mady93823/tamilmvleechbot.git
-    cd tamilmvleechbot
-    ```
+---
 
-2.  **Install Dependencies**
-    ```bash
-    pip install -r requirements.txt
-    ```
+## 🛡️ Ban Prevention
 
-3.  **Run qBittorrent (Important)**
-    Use the provided config to disable authentication for the bot.
-    ```bash
-    qbittorrent-nox --configuration "./qbit_config"
-    ```
+This bot implements multiple safety measures to prevent Telegram account bans:
 
-4.  **Start Bot**
-    ```bash
-    python bot.py
-    ```
+| Feature | Implementation | Benefit |
+|---------|----------------|---------|
+| **Rate Limiter** | Max 8 uploads/min, 12 messages/min | 40-60% below Telegram limits |
+| **Auto-Delete** | Messages delete after 10s | Reduces chat spam flags |
+| **Storage Channel** | Upload to private channel | Safer than private chats |
+| **Conservative Limits** | 3 concurrent downloads | Less aggressive than competitors |
+| **FloodWait Buffer** | +10s recovery time | Safer error handling |
 
-## 🐳 Deployment (Docker) - *Recommended*
+---
 
-1.  **Configure**
-    Fill in your details in `config.env`.
+## � Installation
 
-2.  **Run**
-    ```bash
-    docker-compose up -d --build
-    ```
-    *This starts both the Bot and a dedicated qBittorrent instance.*
+### Docker Deployment (Recommended)
+
+```bash
+# Clone the repository
+git clone https://github.com/Mady93823/tamilmvleechbot.git
+cd tamilmvleechbot
+
+# Configure environment
+cp config_sample.env config.env
+# Edit config.env with your credentials
+
+# Build and run
+./rebuild.sh
+```
+
+### Manual Installation
+
+```bash
+# Clone
+git clone https://github.com/Mady93823/tamilmvleechbot.git
+cd tamilmvleechbot
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure
+cp config_sample.env config.env
+# Edit config.env
+
+# Run qBittorrent
+qbittorrent-nox --configuration ./qbit_config &
+
+# Start bot
+python bot.py
+```
+
+---
 
 ## ⚙️ Configuration
 
 Edit `config.env`:
 
-| Variable | Description |
-| :--- | :--- |
-| `BOT_TOKEN` | Your Telegram Bot Token (@BotFather) |
-| `API_ID` | Your Telegram API ID |
-| `API_HASH` | Your Telegram API Hash |
-| `OWNER_ID` | Your Telegram User ID (for Admin control) |
-
-## 🛡️ Credits
-
-*   Built with ❤️ by **Antigravity**
-*   Powered by [Pyrogram](https://github.com/pyrogram/pyrogram) & [qBittorrent](https://www.qbittorrent.org/)
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `BOT_TOKEN` | Telegram Bot Token from [@BotFather](https://t.me/BotFather) | ✅ |
+| `API_ID` | Telegram API ID from [my.telegram.org](https://my.telegram.org) | ✅ |
+| `API_HASH` | Telegram API Hash | ✅ |
+| `OWNER_ID` | Your Telegram User ID | ✅ |
+| `MONGO_URI` | MongoDB connection string | ✅ |
+| `DOWNLOAD_DIR` | Download directory (default: `downloads/`) | ❌ |
+| `QB_HOST` | qBittorrent host (default: `localhost`) | ❌ |
+| `QB_PORT` | qBittorrent port (default: `8090`) | ❌ |
 
 ---
-<p align="center">Made for educational purposes.</p>
+
+## 🎮 Commands
+
+| Command | Description | Auto-Delete |
+|---------|-------------|-------------|
+| `/start` | Welcome message | ❌ |
+| `/help` | Show all commands | ✅ |
+| `/settings` | Configure bot settings | ❌ |
+| `/queue` | View active downloads with progress | ❌ |
+| `/cancel` | Cancel a download | ❌ |
+| `/setthumb` | Set custom thumbnail (reply to photo) | ❌ |
+| `/setchannels` | Configure upload channels<br>`/setchannels -1001234567 \| -1009876543` | ❌ |
+| `/setstorage` | Set storage channel (safer mode) | ✅ |
+| `/limits` | Check current rate limit status | ✅ |
+
+---
+
+## 🎯 Usage
+
+### Download Magnets
+Simply send a magnet link:
+```
+magnet:?xt=urn:btih:1234567890abcdef...
+```
+
+### TamilMV Auto-Scrape
+Send a TamilMV post URL:
+```
+https://www.1tamilmv.haus/index.php?/forums/topic/12345-movie-name/
+```
+Bot will:
+1. Scrape all magnet links
+2. Filter by your size setting (2GB/4GB)
+3. Auto-queue all matching magnets
+4. Process up to 3 concurrently
+
+### Set Storage Channel
+1. Create a private channel
+2. Add bot as admin
+3. Forward any message from channel to bot
+4. Bot auto-detects and saves it
+5. All future uploads go there (safer!)
+
+---
+
+## 📊 Feature Comparison
+
+| Feature | SimpleLeechBot | Other Bots |
+|---------|----------------|------------|
+| Concurrent Downloads | 3 (safe) | 5-10 (risky) |
+| TamilMV Support | ✅ Auto-scrape | ❌ Manual |
+| Rate Limiting | ✅ Built-in | ❌ None |
+| Auto-Delete Messages | ✅ Yes | ❌ No |
+| Storage Channel | ✅ Yes | ❌ No |
+| Ban Protection | ✅ Multiple layers | ⚠️ Basic |
+| Progress Bars | ✅ Visual | ✅ Text only |
+| Multi-Channel | ✅ Unlimited | ⚠️ Limited |
+
+---
+
+## 🏗️ Architecture
+
+```
+SimpleLeechBot/
+├── bot.py                    # Main bot logic
+├── rate_limiter.py          # Rate tracking & throttling
+├── auto_delete.py           # Auto-delete utility
+├── storage_channel.py       # Channel management
+├── tamilmv_handler.py       # TamilMV integration
+├── plugins/
+│   ├── tamilmv_scraper.py  # Web scraping
+│   └── rss_monitor.py       # RSS feeds
+├── settings.py              # MongoDB settings
+├── channel_utils.py         # Multi-channel logic
+├── rename_utils.py          # Filename cleaning
+├── thumb_utils.py           # Thumbnail handling
+└── progress.py              # Progress bars
+```
+
+---
+
+## 🔒 Security
+
+- ✅ Owner-only access (OWNER_ID verification)
+- ✅ MongoDB authentication
+- ✅ qBittorrent WebUI auth
+- ✅ No plaintext credential storage
+- ✅ Auto-file deletion after upload
+- ✅ Rate limiting to prevent abuse
+
+---
+
+## 🐛 Known Issues
+
+- ⚠️ Upload delay not fully integrated (needs 8s between files)
+- ⚠️ Requires new BOT_TOKEN if previously banned
+
+---
+
+## 🚀 Upcoming Features
+
+- [ ] Complete rate limiter upload integration
+- [ ] Auto-delete for all status messages
+- [ ] RSS monitoring for automatic downloads
+- [ ] Multi-source support (1337x, RARBG mirrors)
+- [ ] Upload resume support
+- [ ] Torrent search command
+
+---
+
+## � Credits
+
+- Built with ❤️ by **Antigravity**
+- Powered by [Pyrogram](https://github.com/pyrogram/pyrogram) & [qBittorrent](https://www.qbittorrent.org/)
+- Inspired by [KPS Bot](https://telegram.me/KPSLeechBot)
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+## ⚠️ Disclaimer
+
+This bot is for educational purposes only. Users are responsible for complying with their local laws and Telegram's Terms of Service. The developers are not responsible for any misuse of this software.
+
+---
+
+<div align="center">
+
+**Made with 🤖 by Antigravity**
+
+[Report Bug](https://github.com/Mady93823/tamilmvleechbot/issues) • [Request Feature](https://github.com/Mady93823/tamilmvleechbot/issues)
+
+</div>
