@@ -20,6 +20,7 @@ from plugins import tamilmv_scraper, rss_monitor
 import rate_limiter
 import auto_delete
 import storage_channel
+import caption_utils
 
 # Load Config
 load_dotenv('config.env')
@@ -757,12 +758,17 @@ async def process_download(t_hash, message, status_msg):
                                 parse_mode=enums.ParseMode.HTML
                             )
                         
+                        
+                        # Generate professional caption
+                        file_caption = caption_utils.generate_caption(file_name)
+                        
                         if mode == "document":
                             await app.send_document(
                                 chat_id=channel_id,
                                 document=file_to_upload,
                                 thumb=user_thumb,
-                                caption=f"✅ {file_name}",
+                                caption=file_caption,
+                                parse_mode=enums.ParseMode.HTML,
                                 progress=progress_callback if channel_idx == 1 else None
                             )
                         else:
@@ -770,7 +776,8 @@ async def process_download(t_hash, message, status_msg):
                                 chat_id=channel_id,
                                 video=file_to_upload,
                                 thumb=user_thumb,
-                                caption=f"✅ {file_name}",
+                                caption=file_caption,
+                                parse_mode=enums.ParseMode.HTML,
                                 progress=progress_callback if channel_idx == 1 else None
                             )
                         
