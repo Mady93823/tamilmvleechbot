@@ -17,6 +17,9 @@ import thumb_utils
 import rename_utils
 import channel_utils
 from plugins import tamilmv_scraper, rss_monitor
+import rate_limiter
+import auto_delete
+import storage_channel
 
 # Load Config
 load_dotenv('config.env')
@@ -38,7 +41,7 @@ IS_SHUTTING_DOWN = False
 
 # Multi-download tracking: {hash: {"user_id": ..., "chat_id": ..., "status_msg": ..., "name": ...}}
 ACTIVE_TASKS = {}
-MAX_CONCURRENT_DOWNLOADS = 5  # Maximum concurrent downloads allowed
+MAX_CONCURRENT_DOWNLOADS = 3  # Reduced from 5 for ban prevention
 
 # Pending queue for 6th+ downloads: [(magnet_link, message, status_msg), ...]
 PENDING_TASKS = []
@@ -203,12 +206,72 @@ async def help_handler(client, message):
         "/setthumb - Set custom thumbnail (send with photo)\n\n"
         "<b>Channels:</b>\n"
         "/setchannels - Configure upload channels\n"
+        "/setstorage - Set storage channel (safer)\n"
         "<i>Example: /setchannels -1001234567 | -1009876543</i>\n\n"
+        "<b>Monitoring:</b>\n"
+        "/limits - Check rate limit status\n\n"
         "<b>Download:</b>\n"
-        "Just send a magnet link to start!\n\n"
-        "<i>Max 5 concurrent downloads. 6th+ goes to pending queue.</i>"
+        "Just send a magnet link or TamilMV post URL!\n\n"
+        f"<i>Max {MAX_CONCURRENT_DOWNLOADS} concurrent. 4th+ queues automatically.</i>"
     )
-    await message.reply(help_text, parse_mode=enums.ParseMode.HTML)
+    
+    msg = await message.reply(help_text, parse_mode=enums.ParseMode.HTML)
+    
+    # Auto-delete after configured delay
+    delay = settings.get_setting("auto_delete_delay")
+    if delay > 0:
+        asyncio.create_task(auto_delete.auto_delete_message(msg, delay))
+
+@app.on_message(filters.command("limits"))
+async def limits_handler(client, message):
+    """Show current rate limit status"""
+    if not await check_permissions(message):
+        return
+    
+    stats = rate_limiter.RateLimiter.get_stats()
+    
+    status_emoji = "✅" if stats["is_safe"] else "⚠️"
+    
+    text = (
+        f"📊 <b>Rate Limit Status</b> {status_emoji}\n\n"
+        f"<b>Current Rates:</b>\n"
+        f"📤 Uploads: {stats['uploads_per_min']}/{stats['max_uploads_per_min']} per minute\n"
+        f"💬 Messages: {stats['messages_per_min']}/{stats['max_messages_per_min']} per minute\n"
+        f"📦 Uploads (hour): {stats['uploads_per_hour']}\n\n"
+        f"<b>Status:</b> {'🟢 Safe' if stats['is_safe'] else '🟡 High Load'}\n\n"
+        f"<i>Bot auto-throttles to stay under limits</i>"
+    )
+    
+    msg = await message.reply(text, parse_mode=enums.ParseMode.HTML)
+    
+    delay = settings.get_setting("auto_delete_delay")
+    if delay > 0:
+        asyncio.create_task(auto_delete.auto_delete_message(msg, delay))
+
+@app.on_message(filters.command("setstorage"))
+async def setstorage_handler(client, message):
+    """Set storage channel - instructions"""
+    if not await check_permissions(message):
+        return
+    
+    current = storage_channel.get_storage_channel()
+    
+    text = (
+        "💾 <b>Storage Channel Setup</b>\n\n"
+        f"<b>Current:</b> {f'<code>{current}</code>' if current else 'Not set'}\n\n"
+        "<b>How to set:</b>\n"
+        "1. Create a private channel\n"
+        "2. Add this bot as admin\n"
+        "3. Forward ANY message from that channel to me\n"
+        "4. I'll auto-detect and save it!\n\n"
+        "<i>Files will upload to storage channel (safer than private chat)</i>"
+    )
+    
+    msg = await message.reply(text, parse_mode=enums.ParseMode.HTML)
+    
+    delay = settings.get_setting("auto_delete_delay")
+    if delay > 0:
+        asyncio.create_task(auto_delete.auto_delete_message(msg, delay))
 
 @app.on_message(filters.command("queue"))
 async def queue_handler(client, message):
@@ -787,6 +850,25 @@ async def text_handler(client, message):
     """Handle text messages - check for TamilMV links or magnets"""
     if not await check_permissions(message):
         return
+    
+    # Check for forwarded message (storage channel detection)
+    if message.forward_from_chat:
+        detected = await storage_channel.detect_storage_channel(message)
+        if detected:
+            channel_name = message.forward_from_chat.title or "Unknown"
+            channel_id = message.forward_from_chat.id
+            msg = await message.reply(
+                f"✅ <b>Storage Channel Set!</b>\n\n"
+                f"📢 <b>Name:</b> {channel_name}\n"
+                f"🆔 <b>ID:</b> <code>{channel_id}</code>\n\n"
+                f"<i>All files will now upload to this channel</i>",
+                parse_mode=enums.ParseMode.HTML
+            )
+            
+            delay = settings.get_setting("auto_delete_delay")
+            if delay > 0:
+                asyncio.create_task(auto_delete.auto_delete_message(msg, delay))
+            return
     
     text = message.text.strip()
     

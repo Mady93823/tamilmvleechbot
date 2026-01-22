@@ -10,9 +10,9 @@ def clean_filename(filename):
     # Remove www.ANYTHING (case insensitive) - KPS pattern
     filename = re.sub(r'www\S+', '', filename, flags=re.IGNORECASE)
     
-    # Remove [tags] and (metadata)
-    filename = re.sub(r'\[.*?\]', '', filename)
-    filename = re.sub(r'\(.*?\)', '', filename)
+    # Remove brackets but KEEP content: [2024] becomes 2024, (HD) becomes HD
+    filename = filename.replace('[', ' ').replace(']', ' ')
+    filename = filename.replace('(', ' ').replace(')', ' ')
     
     # Clean leading/trailing dashes and multiple dashes - KPS pattern
     filename = re.sub(r'(^\s*-\s*|(\s*-\s*){2,})', '', filename)
