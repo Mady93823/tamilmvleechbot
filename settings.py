@@ -20,7 +20,9 @@ DEFAULT_SETTINGS = {
     "upload_mode": "document",
     "sudo_users": [],
     "user_thumbnails": {},  # {user_id: "Thumbnails/{user_id}.jpg"}
-    "upload_channels": []  # ["-1001234567", "-1009876543"] - Multiple channel IDs
+    "upload_channels": [],  # ["-1001234567", "-1009876543"] - Multiple channel IDs
+    "storage_channel": None,  # Single private channel for file storage (overrides upload_channels)
+    "auto_delete_delay": 10  # Auto-delete bot messages after N seconds (0 = disabled)
 }
 
 # In-memory cache
