@@ -21,6 +21,7 @@ import rate_limiter
 import auto_delete
 import storage_channel
 import caption_utils
+import torrent_search
 
 # Load Config
 load_dotenv('config.env')
@@ -46,6 +47,9 @@ MAX_CONCURRENT_DOWNLOADS = 3  # Reduced from 5 for ban prevention
 
 # Pending queue for 6th+ downloads: [(magnet_link, message, status_msg), ...]
 PENDING_TASKS = []
+
+# Search results cache: {user_id: [list of torrent dicts]}
+SEARCH_RESULTS_CACHE = {}
 
 # --- qBittorrent Client ---
 # --- qBittorrent Client ---
@@ -211,7 +215,8 @@ async def help_handler(client, message):
         "<i>Example: /setchannels -1001234567 | -1009876543</i>\n\n"
         "<b>Monitoring:</b>\n"
         "/limits - Check rate limit status\n\n"
-        "<b>Download:</b>\n"
+        "<b>Search & Download:</b>\n"
+        "/search <query> - Search torrents (1337x, YTS)\n"
         "Just send a magnet link or TamilMV post URL!\n\n"
         f"<i>Max {MAX_CONCURRENT_DOWNLOADS} concurrent. 4th+ queues automatically.</i>"
     )
@@ -273,6 +278,56 @@ async def setstorage_handler(client, message):
     delay = settings.get_setting("auto_delete_delay")
     if delay > 0:
         asyncio.create_task(auto_delete.auto_delete_message(msg, delay))
+
+@app.on_message(filters.command("search"))
+async def search_handler(client, message):
+    """Search torrents from multiple sources with site selection"""
+    if not await check_permissions(message):
+        return
+    
+    # Extract search query
+    query = message.text.replace("/search", "").strip()
+    
+    if not query:
+        await message.reply(
+            "❌ <b>No search query provided</b>\n\n"
+            "<b>Usage:</b> /search <query>\n"
+            "<b>Example:</b> /search avengers",
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
+    
+    # Store query in user's session for callback
+    user_id = message.from_user.id
+    if user_id not in SEARCH_RESULTS_CACHE:
+        SEARCH_RESULTS_CACHE[user_id] = {}
+    SEARCH_RESULTS_CACHE[user_id]['query'] = query
+    SEARCH_RESULTS_CACHE[user_id]['message_id'] = message.id
+    
+    # Show site selection buttons
+    from torrent_search import SITES
+    buttons = []
+    
+    # Create 2-column layout for site buttons
+    for idx, (site_key, site_name) in enumerate(SITES.items()):
+        callback_data = f"search_site:{site_key}"
+        button = InlineKeyboardButton(site_name, callback_data=callback_data)
+        
+        if idx % 2 == 0:
+            buttons.append([button])
+        else:
+            buttons[-1].append(button)
+    
+    # Add cancel button
+    buttons.append([InlineKeyboardButton("✖️ Cancel", callback_data="close")])
+    
+    await message.reply(
+        f"🔍 <b>Search Query:</b> {query}\n\n"
+        f"<b>Choose a torrent site:</b>",
+        reply_markup=InlineKeyboardMarkup(buttons),
+        parse_mode=enums.ParseMode.HTML
+    )
+
 
 @app.on_message(filters.command("queue"))
 async def queue_handler(client, message):
@@ -432,6 +487,69 @@ async def callback_handler(client, callback):
         await callback.message.delete()
         return
     
+    # Handle torrent selection from search results
+    if data.startswith("torrent_select:"):
+        try:
+            user_id = callback.from_user.id
+            
+            # Extract index from callback data
+            idx = int(data.split(":")[1])
+            
+            # Get cached results
+            if user_id not in SEARCH_RESULTS_CACHE:
+                await callback.answer("⚠️ Search results expired. Please search again.", show_alert=True)
+                return
+            
+            results = SEARCH_RESULTS_CACHE[user_id]
+            
+            if idx >= len(results):
+                await callback.answer("❌ Invalid selection", show_alert=True)
+                return
+            
+            selected = results[idx]
+            magnet = selected.get('magnet')
+            name = selected.get('name', 'Unknown')
+            
+            if not magnet:
+                await callback.answer("❌ No magnet link found", show_alert=True)
+                return
+            
+            # Show selection confirmation
+            await callback.answer(f"✅ Selected: {name[:30]}...", show_alert=False)
+            
+            # Update message to show selection
+            await callback.message.edit(
+                f"✅ <b>Selected Torrent:</b>\n\n"
+                f"📁 <b>{name}</b>\n"
+                f"📦 {selected.get('size', 'Unknown')}\n"
+                f"🌱 {selected.get('seeders', 0)} seeds\n"
+                f"🔗 {selected.get('source', 'Unknown')}\n\n"
+                f"<i>Starting download...</i>",
+                parse_mode=enums.ParseMode.HTML
+            )
+            
+            # Create a fake message object to pass to magnet_handler
+            class FakeMagnetMessage:
+                def __init__(self, text, original_msg):
+                    self.text = text
+                    self.from_user = original_msg.from_user
+                    self.chat = original_msg.chat
+                    
+                    async def reply(self, *args, **kwargs):
+                        return await original_msg.reply(*args, **kwargs)
+                    
+                    self.reply = reply
+            
+            fake_msg = FakeMagnetMessage(magnet, callback.message)
+            
+            # Trigger magnet download
+            await magnet_handler(client, fake_msg)
+            
+        except Exception as e:
+            logger.error(f"Torrent selection error: {e}")
+            await callback.answer(f"❌ Error: {str(e)}", show_alert=True)
+        return
+    
     # Thumbnail handlers
     user_id = callback.from_user.id
     
@@ -489,6 +607,156 @@ async def callback_handler(client, callback):
         except Exception as e:
             logger.error(f"Refresh error: {e}")
         return
+    
+    # Handle site selection for search
+    if data.startswith("search_site:"):
+        try:
+            user_id = callback.from_user.id
+            
+            # Extract site from callback data
+            site_key = data.split(":")[1]
+            
+            # Get cached query
+            if user_id not in SEARCH_RESULTS_CACHE or 'query' not in SEARCH_RESULTS_CACHE[user_id]:
+                await callback.answer("⚠️ Search session expired. Please search again.", show_alert=True)
+                return
+            
+            query = SEARCH_RESULTS_CACHE[user_id]['query']
+            
+            # Show searching status
+            await callback.answer(f"Searching {torrent_search.SITES.get(site_key, site_key)}...", show_alert=False)
+            await callback.message.edit(
+                f"🔍 <b>Searching for:</b> {query}\n"
+                f"🌐 <b>Site:</b> {torrent_search.SITES.get(site_key, site_key)}\n\n"
+                "<i>Please wait...</i>",
+                parse_mode=enums.ParseMode.HTML
+            )
+            
+            # Perform search
+            import torrent_search
+            results = torrent_search.search_torrents(query, site=site_key, max_results=20)
+            
+            if not results:
+                await callback.message.edit(
+                    f"❌ <b>No results found for:</b> {query}\n"
+                    f"<b>Site:</b> {torrent_search.SITES.get(site_key, site_key)}\n\n"
+                    "<i>Try different keywords or another site</i>",
+                    parse_mode=enums.ParseMode.HTML
+                )
+                return
+            
+            # Cache results for download
+            SEARCH_RESULTS_CACHE[user_id]['results'] = results
+            
+            # Create Telegraph page
+            from telegraph_helper import telegraph_helper
+            html_content = telegraph_helper.format_search_results(results, query, len(results))
+            telegraph_url = telegraph_helper.create_page(
+                title=f"Search: {query}",
+                content=html_content
+            )
+            
+            # Create download buttons (first 15 results)
+            buttons = []
+            display_limit = min(15, len(results))
+            
+            for idx in range(display_limit):
+                result = results[idx]
+                name = result.get('name', 'Unknown')
+                seeders = result.get('seeders', 0)
+                
+                # Truncate button text
+                button_text = f"{idx + 1}. {name[:30]}... ({seeders}🌱)"
+                callback_data = f"tor_dl:{idx}"
+                
+                # 1 button per row for clarity
+                buttons.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+            
+            # Add Telegraph view button
+            if telegraph_url:
+                buttons.insert(0, [InlineKeyboardButton("🔎 VIEW ALL RESULTS", url=telegraph_url)])
+            
+            # Add close button
+            buttons.append([InlineKeyboardButton("✖️ Close", callback_data="close")])
+            
+            # Update message
+            await callback.message.edit(
+                f"✅ <b>Found {len(results)} torrents</b>\n"
+                f"🔍 <b>Query:</b> {query}\n"
+                f"🌐 <b>Site:</b> {torrent_search.SITES.get(site_key, site_key)}\n\n"
+                f"<i>Click a torrent below to download, or view all in Telegraph</i>",
+                reply_markup=InlineKeyboardMarkup(buttons),
+                parse_mode=enums.ParseMode.HTML
+            )
+            
+        except Exception as e:
+            logger.error(f"Site search error: {e}")
+            await callback.answer(f"❌ Error: {str(e)}", show_alert=True)
+        return
+    
+    # Handle torrent download selection (new callback format)
+    if data.startswith("tor_dl:"):
+        try:
+            user_id = callback.from_user.id
+            
+            # Extract index from callback data
+            idx = int(data.split(":")[1])
+            
+            # Get cached results
+            if user_id not in SEARCH_RESULTS_CACHE or 'results' not in SEARCH_RESULTS_CACHE[user_id]:
+                await callback.answer("⚠️ Search results expired. Please search again.", show_alert=True)
+                return
+            
+            results = SEARCH_RESULTS_CACHE[user_id]['results']
+            
+            if idx >= len(results):
+                await callback.answer("❌ Invalid selection", show_alert=True)
+                return
+            
+            selected = results[idx]
+            magnet = selected.get('magnet')
+            name = selected.get('name', 'Unknown')
+            
+            if not magnet:
+                await callback.answer("❌ No magnet link found", show_alert=True)
+                return
+            
+            # Show selection confirmation
+            await callback.answer(f"✅ Selected: {name[:30]}...", show_alert=False)
+            
+            # Update message to show selection
+            await callback.message.edit(
+                f"✅ <b>Selected Torrent:</b>\n\n"
+                f"📁 <b>{name}</b>\n"
+                f"📦 {selected.get('size', 'Unknown')}\n"
+                f"🌱 {selected.get('seeders', 0)} seeds | 🔴 {selected.get('leechers', 0)} leechers\n"
+                f"🔗 {selected.get('source', 'Unknown')}\n\n"
+                f"<i>Starting download...</i>",
+                parse_mode=enums.ParseMode.HTML
+            )
+            
+            # Create a fake message object to pass to magnet_handler
+            class FakeMagnetMessage:
+                def __init__(self, text, original_msg):
+                    self.text = text
+                    self.from_user = original_msg.from_user
+                    self.chat = original_msg.chat
+                    
+                    async def reply(self, *args, **kwargs):
+                        return await original_msg.reply(*args, **kwargs)
+                    
+                    self.reply = reply
+            
+            fake_msg = FakeMagnetMessage(magnet, callback.message)
+            
+            # Trigger magnet download
+            await magnet_handler(client, fake_msg)
+            
+        except Exception as e:
+            logger.error(f"Torrent download error: {e}")
+            await callback.answer(f"❌ Error: {str(e)}", show_alert=True)
+        return
+
     
     # Handle Manage Channels
     if data == "manage_channels":
