@@ -257,21 +257,46 @@ async def limits_handler(client, message):
 
 @app.on_message(filters.command("setstorage"))
 async def setstorage_handler(client, message):
-    """Set storage channel - instructions"""
+    """Set storage channel - with manual ID or forward detection"""
     if not await check_permissions(message):
         return
     
+    # Check if user provided channel ID directly
+    text = message.text.replace("/setstorage", "").strip()
+    
+    if text:
+        # User provided channel ID directly
+        if storage_channel.set_storage_channel_by_id(text):
+            await message.reply(
+                f"✅ <b>Storage Channel Set!</b>\n\n"
+                f"<b>Channel ID:</b> <code>{text}</code>\n\n"
+                f"<i>Files will now be uploaded here</i>\n\n"
+                f"⚠️ <b>Important:</b> Make sure the bot is added as admin to this channel!",
+                parse_mode=enums.ParseMode.HTML
+            )
+        else:
+            await message.reply(
+                "❌ <b>Invalid Channel ID</b>\n\n"
+                "<i>Channel IDs must be negative numbers (e.g., -1001234567890)</i>",
+                parse_mode=enums.ParseMode.HTML
+            )
+        return
+    
+    # Show instructions
     current = storage_channel.get_storage_channel()
     
     text = (
         "💾 <b>Storage Channel Setup</b>\n\n"
         f"<b>Current:</b> {f'<code>{current}</code>' if current else 'Not set'}\n\n"
-        "<b>How to set:</b>\n"
-        "1. Create a private channel\n"
+        "<b>Method 1: Forward a Message (Public Channels Only)</b>\n"
+        "1. Create a channel\n"
         "2. Add this bot as admin\n"
-        "3. Forward ANY message from that channel to me\n"
-        "4. I'll auto-detect and save it!\n\n"
-        "<i>Files will upload to storage channel (safer than private chat)</i>"
+        "3. Forward ANY message from that channel to me\n\n"
+        "<b>Method 2: Use Channel ID (Works for Private Channels)</b>\n"
+        "1. Create a channel & add bot as admin\n"
+        "2. Get the channel ID (use @username_to_id_bot or similar)\n"
+        "3. Send: <code>/setstorage -1001234567890</code>\n\n"
+        "<i>Files will upload to storage channel (safer)</i>"
     )
     
     msg = await message.reply(text, parse_mode=enums.ParseMode.HTML)
@@ -285,15 +310,30 @@ async def forwarded_message_handler(client, message):
     """Handle forwarded messages for storage channel detection"""
     if not await check_permissions(message):
         return
-        
-    if await storage_channel.detect_storage_channel(message):
+    
+    success, channel_id, channel_name = await storage_channel.detect_storage_channel(message)
+    
+    if success:
+        # Successfully detected public channel
         await message.reply(
             f"✅ <b>Storage Channel Detected!</b>\n\n"
-            f"<b>Channel:</b> {message.forward_from_chat.title}\n"
-            f"<b>ID:</b> <code>{message.forward_from_chat.id}</code>\n\n"
-            f"<i>Files will now be forwarded to this channel for safe keeping.</i>",
+            f"<b>Channel:</b> {channel_name}\n"
+            f"<b>ID:</b> <code>{channel_id}</code>\n\n"
+            f"<i>Files will now be uploaded to this channel</i>",
             parse_mode=enums.ParseMode.HTML
         )
+    elif success is None:
+        # Private channel - can't auto-detect
+        await message.reply(
+            "⚠️ <b>Private Channel Detected</b>\n\n"
+            "I can't auto-detect private channels due to Telegram privacy settings.\n\n"
+            "<b>To set a private channel:</b>\n"
+            "1. Get your channel ID using @username_to_id_bot\n"
+            "2. Send: <code>/setstorage -1001234567890</code>\n\n"
+            "<i>Replace with your actual channel ID</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
 
 @app.on_message(filters.command("search"))
 async def search_handler(client, message):
