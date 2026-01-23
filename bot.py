@@ -22,6 +22,7 @@ import auto_delete
 import storage_channel
 import caption_utils
 import torrent_search
+from telegraph_helper import telegraph_helper
 
 # Load Config
 load_dotenv('config.env')
@@ -279,6 +280,21 @@ async def setstorage_handler(client, message):
     if delay > 0:
         asyncio.create_task(auto_delete.auto_delete_message(msg, delay))
 
+@app.on_message(filters.forwarded & filters.private)
+async def forwarded_message_handler(client, message):
+    """Handle forwarded messages for storage channel detection"""
+    if not await check_permissions(message):
+        return
+        
+    if await storage_channel.detect_storage_channel(message):
+        await message.reply(
+            f"✅ <b>Storage Channel Detected!</b>\n\n"
+            f"<b>Channel:</b> {message.forward_from_chat.title}\n"
+            f"<b>ID:</b> <code>{message.forward_from_chat.id}</code>\n\n"
+            f"<i>Files will now be forwarded to this channel for safe keeping.</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
 @app.on_message(filters.command("search"))
 async def search_handler(client, message):
     """Search torrents from multiple sources with site selection"""
@@ -305,11 +321,10 @@ async def search_handler(client, message):
     SEARCH_RESULTS_CACHE[user_id]['message_id'] = message.id
     
     # Show site selection buttons
-    from torrent_search import SITES
     buttons = []
     
     # Create 2-column layout for site buttons
-    for idx, (site_key, site_name) in enumerate(SITES.items()):
+    for idx, (site_key, site_name) in enumerate(torrent_search.SITES.items()):
         callback_data = f"search_site:{site_key}"
         button = InlineKeyboardButton(site_name, callback_data=callback_data)
         
@@ -633,7 +648,6 @@ async def callback_handler(client, callback):
             )
             
             # Perform search
-            import torrent_search
             results = torrent_search.search_torrents(query, site=site_key, max_results=20)
             
             if not results:
@@ -649,7 +663,6 @@ async def callback_handler(client, callback):
             SEARCH_RESULTS_CACHE[user_id]['results'] = results
             
             # Create Telegraph page
-            from telegraph_helper import telegraph_helper
             html_content = telegraph_helper.format_search_results(results, query, len(results))
             telegraph_url = telegraph_helper.create_page(
                 title=f"Search: {query}",
