@@ -16,7 +16,7 @@ import progress
 import thumb_utils
 import rename_utils
 import channel_utils
-from plugins import tamilmv_scraper, rss_monitor
+from plugins import tamilmv_scraper, rss_monitor, direct_link_generator
 import rate_limiter
 import auto_delete
 import storage_channel
@@ -214,10 +214,14 @@ async def help_handler(client, message):
         "/setchannels - Configure upload channels\n"
         "/setstorage - Set storage channel (safer)\n"
         "<i>Example: /setchannels -1001234567 | -1009876543</i>\n\n"
+        "<b>Direct Links:</b>\n"
+        "/dirlink <magnet> - Generate 3-hour direct download link\n"
+        "/getlink [ID] - Download file by link ID\n"
+        "<i>Perfect for quick sharing without uploading to Telegram</i>\n\n"
         "<b>Monitoring:</b>\n"
         "/limits - Check rate limit status\n\n"
         "<b>Search & Download:</b>\n"
-        "/search <query> - Search torrents (1337x, YTS)\n"
+        "/search <query> - Search torrents (1337x, YTS, etc.)\n"
         "Just send a magnet link or TamilMV post URL!\n\n"
         f"<i>Max {MAX_CONCURRENT_DOWNLOADS} concurrent. 4th+ queues automatically.</i>"
     )
@@ -382,6 +386,281 @@ async def search_handler(client, message):
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode=enums.ParseMode.HTML
     )
+
+
+@app.on_message(filters.command("dirlink"))
+async def dirlink_handler(client, message):
+    """Generate direct download link from magnet"""
+    if not await check_permissions(message):
+        return
+    
+    # Extract magnet link
+    magnet_link = message.text.replace("/dirlink", "").strip()
+    
+    if not magnet_link or not magnet_link.startswith("magnet:?xt=urn:btih:"):
+        await message.reply(
+            "❌ <b>Invalid magnet link</b>\n\n"
+            "<b>Usage:</b> /dirlink magnet:?xt=urn:btih:...\n\n"
+            "<i>Paste the magnet link after the command</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
+    
+    # Create status message
+    status_msg = await message.reply(
+        "🔗 <b>Direct Link Generator</b>\n\n"
+        "⏬ Starting download...\n"
+        "<i>This may take a while depending on file size</i>",
+        parse_mode=enums.ParseMode.HTML
+    )
+    
+    # Generate link ID
+    link_id = direct_link_generator.generate_link_id(magnet_link)
+    
+    # Check if link already exists
+    if direct_link_generator.is_link_valid(link_id):
+        link_info = direct_link_generator.get_link_info(link_id)
+        from progress import get_readable_file_size
+        from datetime import datetime
+        
+        expires_at = datetime.fromtimestamp(link_info["expires_at"])
+        hours_remaining = (link_info["expires_at"] - time.time()) / 3600
+        
+        await safe_edit(
+            status_msg,
+            f"✅ <b>Link Already Generated!</b>\n\n"
+            f"📁 <b>File:</b> {link_info['filename'][:50]}...\n"
+            f"💾 <b>Size:</b> {get_readable_file_size(link_info['size'])}\n"
+            f"🔗 <b>Link ID:</b> <code>{link_id}</code>\n\n"
+            f"⏰ <b>Expires:</b> {expires_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"⏳ <b>Time Left:</b> {hours_remaining:.1f} hours\n\n"
+            f"<i>Use the same link ID to download</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
+    
+    # Progress callback
+    async def progress_callback(progress_percent, state, torrent):
+        try:
+            from progress import get_readable_file_size, get_readable_time
+            
+            speed_str = get_readable_file_size(torrent.dlspeed) + "/s"
+            eta = torrent.eta if torrent.eta > 0 else 0
+            eta_str = get_readable_time(eta) if eta > 0 else "∞"
+            
+            progress_bar = progress.get_progress_bar(progress_percent)
+            
+            await safe_edit(
+                status_msg,
+                f"🔗 <b>Direct Link Generator</b>\n\n"
+                f"📁 {torrent.name[:40]}...\n\n"
+                f"{progress_bar} {progress_percent:.1f}%\n"
+                f"💾 {get_readable_file_size(torrent.downloaded)} / {get_readable_file_size(torrent.size)}\n"
+                f"⚡ {speed_str} | ⏱ {eta_str}\n"
+                f"🌱 S: {torrent.num_seeds} | P: {torrent.num_leechs}",
+                parse_mode=enums.ParseMode.HTML
+            )
+        except Exception as e:
+            logger.error(f"Progress callback error: {e}")
+    
+    # Download the file
+    result = await direct_link_generator.download_from_magnet(
+        qb, 
+        magnet_link, 
+        status_callback=progress_callback
+    )
+    
+    if not result["success"]:
+        await safe_edit(
+            status_msg,
+            f"❌ <b>Download Failed</b>\n\n"
+            f"<b>Error:</b> {result.get('error', 'Unknown error')}\n\n"
+            f"<i>Please try again or check the magnet link</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
+    
+    # Add to active links
+    direct_link_generator.add_active_link(
+        link_id,
+        result["file_path"],
+        result["filename"],
+        result["size"]
+    )
+    
+    # Generate download info
+    from progress import get_readable_file_size
+    from datetime import datetime, timedelta
+    
+    expires_at = datetime.now() + timedelta(hours=direct_link_generator.LINK_EXPIRY_HOURS)
+    
+    await safe_edit(
+        status_msg,
+        f"✅ <b>Direct Link Generated!</b>\n\n"
+        f"📁 <b>File:</b> {result['filename'][:50]}...\n"
+        f"💾 <b>Size:</b> {get_readable_file_size(result['size'])}\n"
+        f"🔗 <b>Link ID:</b> <code>{link_id}</code>\n\n"
+        f"⏰ <b>Expires:</b> {expires_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"⏳ <b>Valid for:</b> {direct_link_generator.LINK_EXPIRY_HOURS} hours\n\n"
+        f"<b>📥 To download:</b>\n"
+        f"Send <code>/getlink {link_id}</code>\n\n"
+        f"<i>File will be auto-deleted after expiry</i>",
+        parse_mode=enums.ParseMode.HTML
+    )
+    
+    logger.info(f"Direct link created: {link_id} - {result['filename']}")
+
+
+@app.on_message(filters.command("getlink"))
+async def getlink_handler(client, message):
+    """Get download link by ID"""
+    if not await check_permissions(message):
+        return
+    
+    link_id = message.text.replace("/getlink", "").strip()
+    
+    if not link_id:
+        # Show all active links
+        active = direct_link_generator.get_active_links_info()
+        
+        if not active:
+            await message.reply(
+                "📭 <b>No Active Links</b>\n\n"
+                "<i>Use /dirlink to create a direct download link</i>",
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+        
+        from progress import get_readable_file_size
+        
+        links_text = "🔗 <b>Active Direct Links</b>\n\n"
+        for info in active:
+            links_text += (
+                f"<b>ID:</b> <code>{info['link_id']}</code>\n"
+                f"📁 {info['filename'][:40]}...\n"
+                f"💾 {get_readable_file_size(info['size'])}\n"
+                f"⏳ {info['hours_remaining']:.1f}h remaining\n\n"
+            )
+        
+        links_text += "<i>Use /getlink [ID] to download</i>"
+        
+        await message.reply(links_text, parse_mode=enums.ParseMode.HTML)
+        return
+    
+    # Validate link
+    if not direct_link_generator.is_link_valid(link_id):
+        await message.reply(
+            "❌ <b>Invalid or Expired Link</b>\n\n"
+            f"<b>Link ID:</b> <code>{link_id}</code>\n\n"
+            "<i>The link may have expired (3-hour limit) or doesn't exist</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
+    
+    # Get link info
+    link_info = direct_link_generator.get_link_info(link_id)
+    file_path = link_info["file_path"]
+    filename = link_info["filename"]
+    
+    # Check if file exists
+    if not os.path.exists(file_path):
+        await message.reply(
+            "❌ <b>File Not Found</b>\n\n"
+            f"<b>File:</b> {filename}\n\n"
+            "<i>File may have been deleted</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
+    
+    # Send file
+    status_msg = await message.reply(
+        f"📤 <b>Uploading File</b>\n\n"
+        f"📁 {filename[:50]}...\n\n"
+        f"<i>Please wait...</i>",
+        parse_mode=enums.ParseMode.HTML
+    )
+    
+    try:
+        # Get user thumbnail
+        user_thumb = await thumb_utils.get_user_thumbnail(message.from_user.id)
+        
+        # Progress callback for upload
+        async def upload_progress(current, total):
+            try:
+                percentage = (current / total) * 100
+                from progress import get_readable_file_size, get_progress_bar
+                
+                progress_bar = get_progress_bar(percentage)
+                
+                await safe_edit(
+                    status_msg,
+                    f"📤 <b>Uploading File</b>\n\n"
+                    f"📁 {filename[:40]}...\n\n"
+                    f"{progress_bar} {percentage:.1f}%\n"
+                    f"💾 {get_readable_file_size(current)} / {get_readable_file_size(total)}",
+                    parse_mode=enums.ParseMode.HTML
+                )
+            except Exception as e:
+                logger.error(f"Upload progress error: {e}")
+        
+        # Determine if file or directory
+        if os.path.isfile(file_path):
+            # Single file
+            await client.send_document(
+                chat_id=message.chat.id,
+                document=file_path,
+                thumb=user_thumb,
+                caption=f"📥 {filename}",
+                progress=upload_progress
+            )
+        else:
+            # Directory with multiple files
+            files = []
+            for root, dirs, filenames in os.walk(file_path):
+                for fname in filenames:
+                    full_path = os.path.join(root, fname)
+                    files.append(full_path)
+            
+            await safe_edit(
+                status_msg,
+                f"📤 <b>Uploading {len(files)} file(s)</b>\n\n"
+                f"<i>Please wait...</i>",
+                parse_mode=enums.ParseMode.HTML
+            )
+            
+            for idx, fpath in enumerate(files, 1):
+                fname = os.path.basename(fpath)
+                await safe_edit(
+                    status_msg,
+                    f"📤 <b>Uploading file {idx}/{len(files)}</b>\n\n"
+                    f"📁 {fname[:40]}...",
+                    parse_mode=enums.ParseMode.HTML
+                )
+                
+                await client.send_document(
+                    chat_id=message.chat.id,
+                    document=fpath,
+                    thumb=user_thumb,
+                    caption=f"📥 {fname}",
+                    progress=upload_progress
+                )
+        
+        await safe_edit(
+            status_msg,
+            f"✅ <b>Upload Complete!</b>\n\n"
+            f"📁 {filename}\n\n"
+            f"<i>Link is still active for {link_info['hours_remaining']:.1f}h</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+        
+    except Exception as e:
+        logger.error(f"Error sending file: {e}")
+        await safe_edit(
+            status_msg,
+            f"❌ <b>Upload Failed</b>\n\n"
+            f"<b>Error:</b> {str(e)}",
+            parse_mode=enums.ParseMode.HTML
+        )
 
 
 @app.on_message(filters.command("queue"))
@@ -1448,6 +1727,10 @@ if __name__ == "__main__":
         # Start RSS worker on startup
         loop = asyncio.get_event_loop()
         loop.create_task(rss_worker(app))
+        
+        # Start direct link cleanup worker
+        loop.create_task(direct_link_generator.cleanup_worker())
+        logger.info("Started direct link cleanup worker")
         
         app.run()
     finally:

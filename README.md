@@ -24,24 +24,27 @@
 - 📁 **Multi-File Handling** - Automatic folder uploads with natural sorting
 - 📤 **Multi-Channel Upload** - Upload to multiple Telegram channels simultaneously
 - 🌐 **TamilMV Integration** - Auto-scrape and queue magnets from TamilMV posts
-- 🖼️ **Custom Thumbnails** - Per-user thumbnail support
+- � **Direct Link Generator** - Create 3-hour shareable download links from magnets
+- �🖼️ **Custom Thumbnails** - Per-user thumbnail support
 - 📏 **Smart Size Filtering** - 2GB/4GB configurable limits
 - 🗑️ **Auto-Cleanup** - Files deleted immediately after upload
 
 ### Queue Management
 - 🔢 **Concurrent Downloads** - 3 simultaneous downloads (safe limit)
 - ⏳ **Pending Queue** - Auto-queue 4th+ downloads
-- � **Progress Bars** - Visual `[████████░░]` style indicators
+- 📊 **Progress Bars** - Visual `[████████░░]` style indicators
 - ❌ **Individual Cancellation** - Cancel any download by hash
 - 🔄 **Auto-Resume** - Pending downloads start automatically when slots free
 
 ### Advanced Features
 - 🛡️ **Rate Limiting** - Smart throttling to prevent API bans
-- � **Storage Channel Mode** - Upload to private channel (safer)
+- 💾 **Storage Channel Mode** - Upload to private channel (safer)
 - 🗑️ **Auto-Delete Messages** - Bot messages auto-delete after 10s
 - 📝 **Filename Cleaning** - Remove unwanted patterns (www.TamilMV, etc.)
 - 🔍 **Duplicate Detection** - Hash-based duplicate prevention
 - 📊 **Real-time Monitoring** - `/limits` command shows current API usage
+- 🔎 **Torrent Search** - Search multiple torrent sites (1337x, YTS, PirateBay, Nyaa)
+- ⏰ **Link Expiration** - Direct links auto-expire after 3 hours
 
 ---
 
@@ -59,7 +62,7 @@ This bot implements multiple safety measures to prevent Telegram account bans:
 
 ---
 
-## � Installation
+## 📦 Installation
 
 ### Docker Deployment (Recommended)
 
@@ -128,6 +131,9 @@ Edit `config.env`:
 | `/setthumb` | Set custom thumbnail (reply to photo) | ❌ |
 | `/setchannels` | Configure upload channels<br>`/setchannels -1001234567 \| -1009876543` | ❌ |
 | `/setstorage` | Set storage channel (safer mode) | ✅ |
+| `/search <query>` | Search torrents from multiple sites | ❌ |
+| `/dirlink <magnet>` | Generate 3-hour direct download link | ❌ |
+| `/getlink [ID]` | Download file by link ID or list active links | ❌ |
 | `/limits` | Check current rate limit status | ✅ |
 
 ---
@@ -151,12 +157,36 @@ Bot will:
 3. Auto-queue all matching magnets
 4. Process up to 3 concurrently
 
+### Direct Link Generator
+Create shareable download links without uploading to Telegram:
+```
+/dirlink magnet:?xt=urn:btih:1234567890abcdef...
+```
+The bot will:
+1. Download the file to `directdownloads/` directory
+2. Generate a unique link ID
+3. Provide a 3-hour valid link
+4. Auto-delete file after expiration
+
+To download:
+```
+/getlink [ID]  # Download specific file
+/getlink       # List all active links
+```
+
+### Torrent Search
+Search across multiple torrent sites:
+```
+/search avengers
+```
+Choose a site (1337x, YTS, PirateBay, Nyaa) and view results in Telegraph.
+
 ### Set Storage Channel
 1. Create a private channel
 2. Add bot as admin
-3. Forward any message from channel to bot
-4. Bot auto-detects and saves it
-5. All future uploads go there (safer!)
+3. Send `/setstorage -1001234567890` (use your channel ID)
+   - OR forward any message from channel to bot (public channels only)
+4. All future uploads go there (safer!)
 
 ---
 
@@ -169,6 +199,8 @@ Bot will:
 | Rate Limiting | ✅ Built-in | ❌ None |
 | Auto-Delete Messages | ✅ Yes | ❌ No |
 | Storage Channel | ✅ Yes | ❌ No |
+| Direct Links | ✅ 3-hour expiry | ❌ No |
+| Torrent Search | ✅ Multi-site | ⚠️ Limited |
 | Ban Protection | ✅ Multiple layers | ⚠️ Basic |
 | Progress Bars | ✅ Visual | ✅ Text only |
 | Multi-Channel | ✅ Unlimited | ⚠️ Limited |
