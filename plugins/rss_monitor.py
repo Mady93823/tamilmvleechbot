@@ -123,87 +123,100 @@ class RSSMonitor:
             new_topics = []
             seen_in_loop = set()
             
-            # --- Strategy 1: Target "RECENTLY ADDED" Widget specifically ---
-            # This is usually an 'ipsWidget' or similar container.
-            # We look for the text "RECENTLY ADDED" and find its container.
+            # --- Strategy: Target BOTH sections ---
+            # 1. RECENTLY ADDED
+            # 2. WEEKLY TOP
             
-            recent_section = None
-            header_node = soup.find(string=lambda t: t and "RECENTLY ADDED" in t)
+            sections_to_scan = []
             
-            if header_node:
-                # Traverse up to find the widget container
-                container = header_node.parent
+            # Find "RECENTLY ADDED" section
+            recent_header = soup.find(string=lambda t: t and "RECENTLY ADDED" in t)
+            if recent_header:
+                container = recent_header.parent
                 for _ in range(10):
-                    # Check for common widget classes in IPBoard/Invision
                     classes = container.get('class', [])
                     if container.name in ['div', 'li', 'ul', 'aside'] and (
                         'ipsWidget' in classes or 
                         'ipsBox' in classes or 
                         'cWidgetContainer' in classes
                     ):
-                        recent_section = container
+                        sections_to_scan.append(("RECENTLY ADDED", container))
+                        logger.info("Found 'RECENTLY ADDED' section")
                         break
                     if container.parent:
                         container = container.parent
             
-            if recent_section:
-                logger.info("Found 'RECENTLY ADDED' section, prioritizing its links.")
-                links_to_scan = recent_section.find_all('a', href=True)
-            else:
-                logger.warning("Could not isolate 'RECENTLY ADDED' section. Scanning ALL links.")
-                links_to_scan = soup.find_all('a', href=True)
-
-            # Process links
-            for link in links_to_scan:
-                href = link['href']
+            # Find "WEEKLY TOP" or "TOP RELEASES" section
+            weekly_header = soup.find(string=lambda t: t and ("WEEKLY TOP" in t or "TOP RELEASES" in t or "THIS WEEK" in t))
+            if weekly_header:
+                container = weekly_header.parent
+                for _ in range(10):
+                    classes = container.get('class', [])
+                    if container.name in ['div', 'li', 'ul', 'aside'] and (
+                        'ipsWidget' in classes or 
+                        'ipsBox' in classes or 
+                        'cWidgetContainer' in classes
+                    ):
+                        sections_to_scan.append(("WEEKLY TOP", container))
+                        logger.info("Found 'WEEKLY TOP' section")
+                        break
+                    if container.parent:
+                        container = container.parent
+            
+            # If no sections found, scan all links
+            if not sections_to_scan:
+                logger.warning("Could not isolate sections. Scanning ALL links.")
+                sections_to_scan = [("ALL", soup)]
+            
+            # Process each section
+            for section_name, section in sections_to_scan:
+                links_to_scan = section.find_all('a', href=True)
+                logger.info(f"Scanning {len(links_to_scan)} links in '{section_name}' section")
                 
-                # Filter for topic links
-                if '/forums/topic/' in href:
-                    topic_id = self.get_topic_id(href)
+                for link in links_to_scan:
+                    href = link['href']
                     
-                    if topic_id:
-                        # Prevent duplicate processing in same loop
-                        if topic_id in seen_in_loop:
-                            continue
-                        seen_in_loop.add(topic_id)
+                    # Filter for topic links
+                    if '/forums/topic/' in href:
+                        topic_id = self.get_topic_id(href)
                         
-                        # Get Title
-                        title = link.get_text(strip=True)
-                        if not title:
-                            title = link.get('title', 'Unknown Topic')
+                        if topic_id:
+                            # Prevent duplicate processing in same loop
+                            if topic_id in seen_in_loop:
+                                continue
+                            seen_in_loop.add(topic_id)
                             
-                        # Logic for New vs Updated Topics
-                        is_new = False
-                        
-                        if topic_id not in self.seen_topics:
-                            # 1. Not in memory -> Check DB
-                            if self.collection is not None:
-                                doc = self.collection.find_one({"topic_id": topic_id})
-                                if not doc:
-                                    is_new = True
-                                else:
-                                    # 2. In DB -> Check if Title Changed (Update detection)
-                                    # Use fuzzy check or direct equality. Title often changes for series.
-                                    # Clean titles to avoid minor formatting diffs
-                                    old_title = doc.get("title", "")
-                                    if old_title != title:
-                                        logger.info(f"RSS: Topic Updated! {topic_id} | Old: {old_title} -> New: {title}")
+                            # Get Title
+                            title = link.get_text(strip=True)
+                            if not title:
+                                title = link.get('title', 'Unknown Topic')
+                                
+                            # Logic for New vs Updated Topics
+                            is_new = False
+                            
+                            if topic_id not in self.seen_topics:
+                                # 1. Not in memory -> Check DB
+                                if self.collection is not None:
+                                    doc = self.collection.find_one({"topic_id": topic_id})
+                                    if not doc:
                                         is_new = True
+                                        logger.info(f"RSS [{section_name}]: New topic {topic_id} - {title}")
                                     else:
-                                        self.seen_topics.add(topic_id) # Sync memory
-                        else:
-                            # 3. In memory -> Check if we need to re-validate title from DB?
-                            # Usually memory is up to date, but to be safe for updates:
-                            # We can skip this optimization if we want aggressive update checking.
-                            # But for now, let's assume seen_topics means "Seen with current title"
-                            pass
-                            
-                        if is_new:
-                            new_topics.append({
-                                "topic_id": topic_id,
-                                "url": href,
-                                "title": title
-                            })
+                                        # 2. In DB -> Check if Title Changed (Update detection)
+                                        old_title = doc.get("title", "")
+                                        if old_title != title:
+                                            logger.info(f"RSS [{section_name}]: Topic Updated! {topic_id} | Old: {old_title} -> New: {title}")
+                                            is_new = True
+                                        else:
+                                            self.seen_topics.add(topic_id) # Sync memory
+                                
+                            if is_new:
+                                new_topics.append({
+                                    "topic_id": topic_id,
+                                    "url": href,
+                                    "title": title,
+                                    "source": section_name
+                                })
             
             # Limit to top 10 (Newest) to avoid flooding
             if len(new_topics) > 10:
@@ -218,6 +231,7 @@ class RSSMonitor:
                 
                 new_topics = to_process
             
+            logger.info(f"RSS: Returning {len(new_topics)} new topics for processing")
             return new_topics
 
         except Exception as e:
