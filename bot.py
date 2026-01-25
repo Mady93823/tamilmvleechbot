@@ -539,12 +539,13 @@ async def getlink_handler(client, message):
                 f"<b>ID:</b> <code>{info['link_id']}</code>\n"
                 f"📁 {info['filename'][:40]}...\n"
                 f"💾 {get_readable_file_size(info['size'])}\n"
-                f"⏳ {info['hours_remaining']:.1f}h remaining\n\n"
+                f"⏳ {info['hours_remaining']:.1f}h remaining\n"
+                f"🔗 <a href='{info['download_url']}'>Download Link</a>\n\n"
             )
         
-        links_text += "<i>Use /getlink [ID] to download</i>"
+        links_text += "<i>Click the download link or use /getlink [ID]</i>"
         
-        await message.reply(links_text, parse_mode=enums.ParseMode.HTML)
+        await message.reply(links_text, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
         return
     
     # Validate link
@@ -559,108 +560,32 @@ async def getlink_handler(client, message):
     
     # Get link info
     link_info = direct_link_generator.get_link_info(link_id)
-    file_path = link_info["file_path"]
     filename = link_info["filename"]
+    file_size = link_info["size"]
     
-    # Check if file exists
-    if not os.path.exists(file_path):
-        await message.reply(
-            "❌ <b>File Not Found</b>\n\n"
-            f"<b>File:</b> {filename}\n\n"
-            "<i>File may have been deleted</i>",
-            parse_mode=enums.ParseMode.HTML
-        )
-        return
+    # Generate download URL
+    download_url = direct_link_generator.get_download_url(link_id, filename)
     
-    # Send file
-    status_msg = await message.reply(
-        f"📤 <b>Uploading File</b>\n\n"
-        f"📁 {filename[:50]}...\n\n"
-        f"<i>Please wait...</i>",
-        parse_mode=enums.ParseMode.HTML
+    from progress import get_readable_file_size
+    from datetime import datetime
+    
+    expires_at = datetime.fromtimestamp(link_info["expires_at"])
+    hours_remaining = (link_info["expires_at"] - time.time()) / 3600
+    
+    await message.reply(
+        f"✅ <b>Direct Download Link Ready!</b>\n\n"
+        f"📁 <b>File:</b> {filename[:60]}...\n"
+        f"💾 <b>Size:</b> {get_readable_file_size(file_size)}\n"
+        f"🔗 <b>Link ID:</b> <code>{link_id}</code>\n\n"
+        f"⏰ <b>Expires:</b> {expires_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"⏳ <b>Valid for:</b> {hours_remaining:.1f} hours\n\n"
+        f"<b>📥 Download URL:</b>\n"
+        f"<a href='{download_url}'>Click here to download</a>\n\n"
+        f"<i>Or copy: </i><code>{download_url}</code>\n\n"
+        f"<i>Note: Multi-file torrents are served as ZIP</i>",
+        parse_mode=enums.ParseMode.HTML,
+        disable_web_page_preview=True
     )
-    
-    try:
-        # Get user thumbnail
-        user_thumb = await thumb_utils.get_user_thumbnail(message.from_user.id)
-        
-        # Progress callback for upload
-        async def upload_progress(current, total):
-            try:
-                percentage = (current / total) * 100
-                from progress import get_readable_file_size, get_progress_bar
-                
-                progress_bar = get_progress_bar(percentage)
-                
-                await safe_edit(
-                    status_msg,
-                    f"📤 <b>Uploading File</b>\n\n"
-                    f"📁 {filename[:40]}...\n\n"
-                    f"{progress_bar} {percentage:.1f}%\n"
-                    f"💾 {get_readable_file_size(current)} / {get_readable_file_size(total)}",
-                    parse_mode=enums.ParseMode.HTML
-                )
-            except Exception as e:
-                logger.error(f"Upload progress error: {e}")
-        
-        # Determine if file or directory
-        if os.path.isfile(file_path):
-            # Single file
-            await client.send_document(
-                chat_id=message.chat.id,
-                document=file_path,
-                thumb=user_thumb,
-                caption=f"📥 {filename}",
-                progress=upload_progress
-            )
-        else:
-            # Directory with multiple files
-            files = []
-            for root, dirs, filenames in os.walk(file_path):
-                for fname in filenames:
-                    full_path = os.path.join(root, fname)
-                    files.append(full_path)
-            
-            await safe_edit(
-                status_msg,
-                f"📤 <b>Uploading {len(files)} file(s)</b>\n\n"
-                f"<i>Please wait...</i>",
-                parse_mode=enums.ParseMode.HTML
-            )
-            
-            for idx, fpath in enumerate(files, 1):
-                fname = os.path.basename(fpath)
-                await safe_edit(
-                    status_msg,
-                    f"📤 <b>Uploading file {idx}/{len(files)}</b>\n\n"
-                    f"📁 {fname[:40]}...",
-                    parse_mode=enums.ParseMode.HTML
-                )
-                
-                await client.send_document(
-                    chat_id=message.chat.id,
-                    document=fpath,
-                    thumb=user_thumb,
-                    caption=f"📥 {fname}",
-                    progress=upload_progress
-                )
-        
-        await safe_edit(
-            status_msg,
-            f"✅ <b>Upload Complete!</b>\n\n"
-            f"📁 {filename}\n\n"
-            f"<i>Link is still active for {link_info['hours_remaining']:.1f}h</i>",
-            parse_mode=enums.ParseMode.HTML
-        )
-        
-    except Exception as e:
-        logger.error(f"Error sending file: {e}")
-        await safe_edit(
-            status_msg,
-            f"❌ <b>Upload Failed</b>\n\n"
-            f"<b>Error:</b> {str(e)}",
-            parse_mode=enums.ParseMode.HTML
-        )
 
 
 @app.on_message(filters.command("queue"))
@@ -1731,6 +1656,10 @@ if __name__ == "__main__":
         # Start direct link cleanup worker
         loop.create_task(direct_link_generator.cleanup_worker())
         logger.info("Started direct link cleanup worker")
+        
+        # Start HTTP file server
+        loop.create_task(direct_link_generator.start_http_server())
+        logger.info("Starting HTTP file server...")
         
         app.run()
     finally:

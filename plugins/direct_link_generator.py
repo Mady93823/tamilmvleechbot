@@ -2,6 +2,7 @@
 Direct Link Generator Plugin
 Downloads torrents and generates temporary direct download links
 Links expire after 3 hours and files are automatically deleted
+Serves files via HTTP instead of uploading to Telegram
 """
 
 import os
@@ -11,6 +12,8 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from qbittorrentapi import Client as qbClient
+from aiohttp import web
+import socket
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +22,17 @@ DIRECT_DOWNLOAD_DIR = "directdownloads"
 LINK_EXPIRY_HOURS = 3
 LINK_EXPIRY_SECONDS = LINK_EXPIRY_HOURS * 3600
 
+# HTTP Server settings
+HTTP_PORT = 8091  # Different from qBittorrent (8090)
+HTTP_HOST = "0.0.0.0"  # Listen on all interfaces
+
 # In-memory storage for active links
 # Format: {link_id: {"file_path": str, "expires_at": timestamp, "filename": str, "size": int}}
 active_links = {}
+
+# Global HTTP server reference
+http_server = None
+http_runner = None
 
 def init_directory():
     """Create directdownloads directory if it doesn't exist"""
@@ -34,10 +45,38 @@ def generate_link_id(magnet_link):
     hash_obj = hashlib.md5(magnet_link.encode())
     return hash_obj.hexdigest()[:12]
 
-def get_download_url(link_id, filename):
+def get_server_ip():
+    """Get public IP or hostname for download URLs"""
+    # Priority 1: Use BASE_URL from environment (for Tailscale, Cloudflare Tunnel, etc.)
+    base_url = os.getenv("BASE_URL")
+    if base_url:
+        # Remove http:// or https:// if present
+        base_url = base_url.replace("http://", "").replace("https://", "")
+        # Remove trailing slash
+        base_url = base_url.rstrip("/")
+        return base_url
+    
+    # Priority 2: Use PUBLIC_IP from environment
+    public_ip = os.getenv("PUBLIC_IP")
+    if public_ip:
+        return public_ip
+    
+    # Priority 3: Try to get hostname
+    try:
+        hostname = socket.gethostname()
+        return hostname
+    except:
+        return "localhost"
+
+def get_download_url(link_id, filename=None):
     """Generate download URL for the file"""
-    # This will be served by a simple HTTP server or Telegram bot
-    return f"/download/{link_id}/{filename}"
+    server_ip = get_server_ip()
+    if filename:
+        # URL encode filename for safety
+        import urllib.parse
+        safe_filename = urllib.parse.quote(filename)
+        return f"http://{server_ip}:{HTTP_PORT}/download/{link_id}/{safe_filename}"
+    return f"http://{server_ip}:{HTTP_PORT}/download/{link_id}"
 
 def add_active_link(link_id, file_path, filename, size):
     """Register a new active download link"""
@@ -224,10 +263,145 @@ def get_active_links_info():
             "size": data["size"],
             "created_at": datetime.fromtimestamp(data["created_at"]),
             "expires_at": datetime.fromtimestamp(data["expires_at"]),
-            "hours_remaining": round(hours_remaining, 2)
+            "hours_remaining": round(hours_remaining, 2),
+            "download_url": get_download_url(link_id, data["filename"])
         })
     
     return info
+
+# HTTP Server handlers
+async def handle_download(request):
+    """Handle file download requests"""
+    link_id = request.match_info.get('link_id')
+    
+    # Validate link
+    if not is_link_valid(link_id):
+        return web.Response(text="404 - Link not found or expired", status=404)
+    
+    link_info = get_link_info(link_id)
+    file_path = link_info["file_path"]
+    filename = link_info["filename"]
+    
+    # Check if file exists
+    if not os.path.exists(file_path):
+        return web.Response(text="404 - File not found", status=404)
+    
+    # Serve file
+    if os.path.isfile(file_path):
+        # Single file
+        return web.FileResponse(
+            file_path,
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"'
+            }
+        )
+    else:
+        # Directory - create ZIP on the fly
+        import zipfile
+        import tempfile
+        
+        # Create temporary ZIP file
+        zip_fd, zip_path = tempfile.mkstemp(suffix='.zip')
+        os.close(zip_fd)
+        
+        try:
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for root, dirs, files in os.walk(file_path):
+                    for file in files:
+                        file_full_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_full_path, file_path)
+                        zipf.write(file_full_path, arcname)
+            
+            # Serve ZIP file
+            response = web.FileResponse(
+                zip_path,
+                headers={
+                    'Content-Disposition': f'attachment; filename="{filename}.zip"'
+                }
+            )
+            
+            # Delete temp file after response
+            async def cleanup_temp():
+                await asyncio.sleep(5)
+                try:
+                    os.remove(zip_path)
+                except:
+                    pass
+            
+            asyncio.create_task(cleanup_temp())
+            
+            return response
+        
+        except Exception as e:
+            logger.error(f"Error creating ZIP: {e}")
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+            return web.Response(text="500 - Error creating archive", status=500)
+
+async def handle_info(request):
+    """Show information about all active links"""
+    links_info = get_active_links_info()
+    
+    html = """
+    <html>
+    <head>
+        <title>Direct Link Generator - Active Links</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            h1 { color: #333; }
+            .link { background: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 5px; }
+            .id { font-family: monospace; font-weight: bold; }
+            a { color: #0066cc; text-decoration: none; }
+            a:hover { text-decoration: underline; }
+        </style>
+    </head>
+    <body>
+        <h1>🔗 Active Download Links</h1>
+    """
+    
+    if not links_info:
+        html += "<p><i>No active links</i></p>"
+    else:
+        for info in links_info:
+            from progress import get_readable_file_size
+            html += f"""
+            <div class="link">
+                <p><strong>Link ID:</strong> <span class="id">{info['link_id']}</span></p>
+                <p><strong>File:</strong> {info['filename']}</p>
+                <p><strong>Size:</strong> {get_readable_file_size(info['size'])}</p>
+                <p><strong>Expires:</strong> {info['expires_at']} ({info['hours_remaining']:.1f}h remaining)</p>
+                <p><a href="{info['download_url']}" download>📥 Download</a></p>
+            </div>
+            """
+    
+    html += "</body></html>"
+    
+    return web.Response(text=html, content_type='text/html')
+
+async def start_http_server():
+    """Start HTTP file server"""
+    global http_server, http_runner
+    
+    app = web.Application()
+    app.router.add_get('/download/{link_id}/{filename:.*}', handle_download)
+    app.router.add_get('/download/{link_id}', handle_download)
+    app.router.add_get('/', handle_info)
+    app.router.add_get('/links', handle_info)
+    
+    http_runner = web.AppRunner(app)
+    await http_runner.setup()
+    
+    site = web.TCPSite(http_runner, HTTP_HOST, HTTP_PORT)
+    await site.start()
+    
+    logger.info(f"HTTP File Server started on http://{HTTP_HOST}:{HTTP_PORT}")
+
+async def stop_http_server():
+    """Stop HTTP file server"""
+    global http_runner
+    if http_runner:
+        await http_runner.cleanup()
+        logger.info("HTTP File Server stopped")
 
 # Initialize directory on module load
 init_directory()
