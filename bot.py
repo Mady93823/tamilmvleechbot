@@ -1565,7 +1565,7 @@ async def rss_worker(client):
             new_topics = await asyncio.to_thread(rss_monitor.monitor.fetch_recent_topics)
             
             if new_topics:
-                logger.info(f"RSS: Found {len(new_topics)} new topics")
+                logger.info(f"RSS: Found {len(new_topics)} topics to process")
                 
                 for topic in reversed(new_topics):  # Process oldest to newest
                     if IS_SHUTTING_DOWN:
@@ -1574,15 +1574,21 @@ async def rss_worker(client):
                     topic_url = topic["url"]
                     topic_title = topic["title"]
                     topic_id = topic["topic_id"]
+                    is_retry = topic.get("is_retry", False)
+                    retry_count = topic.get("retry_count", 0)
                     
-                    logger.info(f"RSS: Processing {topic_title}")
+                    if is_retry:
+                        logger.info(f"RSS: Retrying incomplete topic ({retry_count+1}/10): {topic_title}")
+                    else:
+                        logger.info(f"RSS: Processing new topic: {topic_title}")
                     
                     try:
                         # Notify owner
                         if OWNER_ID:
+                            retry_info = f"\n🔄 <b>Retry {retry_count+1}/10</b>" if is_retry else ""
                             await client.send_message(
                                 chat_id=OWNER_ID,
-                                text=f"📰 <b>New Post Found!</b>\n\n<a href='{topic_url}'>{topic_title}</a>\n\n<i>Processing...</i>",
+                                text=f"📰 <b>{'Retrying' if is_retry else 'New'} Post!</b>\n\n<a href='{topic_url}'>{topic_title}</a>{retry_info}\n\n<i>Processing...</i>",
                                 parse_mode=enums.ParseMode.HTML,
                                 disable_web_page_preview=True
                             )
@@ -1611,12 +1617,35 @@ async def rss_worker(client):
                             
                         mock_msg = MockMessage(client, target_chat)
                         
-                        # Process
+                        # Process with intelligent tracking
                         from tamilmv_handler import process_tamilmv_link
-                        await process_tamilmv_link(client, mock_msg, topic_url, magnet_handler)
+                        result = await process_tamilmv_link(client, mock_msg, topic_url, magnet_handler, topic_id)
                         
-                        # Mark as processed
-                        rss_monitor.monitor.mark_as_processed(topic_id, topic_title)
+                        # Handle result intelligently
+                        if result['is_complete']:
+                            # Topic is complete - mark as processed
+                            logger.info(f"✅ Topic {topic_id} complete - marking as processed")
+                            rss_monitor.monitor.mark_as_processed(topic_id, topic_title)
+                            
+                            # If it was a retry, update to mark complete
+                            if is_retry:
+                                rss_monitor.monitor.update_incomplete_topic(topic_id, result['magnets_found'], all_complete=True)
+                        else:
+                            # Topic is incomplete - track for retry
+                            logger.warning(f"⚠️ Topic {topic_id} incomplete: {result['titles_found']} sections, {result['magnets_found']} magnets")
+                            
+                            if is_retry:
+                                # Update retry status
+                                rss_monitor.monitor.update_incomplete_topic(topic_id, result['magnets_found'], all_complete=False)
+                            else:
+                                # First time encountering incomplete topic
+                                rss_monitor.monitor.track_incomplete_topic(
+                                    topic_id, 
+                                    topic_title, 
+                                    topic_url, 
+                                    result['titles_found'], 
+                                    result['magnets_found']
+                                )
                         
                         # Wait a bit between posts (Safe limit to avoid FloodWait)
                         await asyncio.sleep(60)
@@ -1626,6 +1655,8 @@ async def rss_worker(client):
                         await asyncio.sleep(e.value + 15)
                     except Exception as e:
                         logger.error(f"RSS Process Error for {topic_title}: {e}")
+                        # On error, mark as processed to avoid infinite loop
+                        rss_monitor.monitor.mark_as_processed(topic_id, topic_title)
                         await asyncio.sleep(5)
             
             # Wait for next check

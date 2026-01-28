@@ -8,17 +8,41 @@ logger = logging.getLogger(__name__)
 
 from pyrogram.errors import FloodWait
 
-async def process_tamilmv_link(client, message, url, magnet_handler):
-    """Process TamilMV post link - scrape and queue magnets"""
+async def process_tamilmv_link(client, message, url, magnet_handler, topic_id=None):
+    """
+    Process TamilMV post link - scrape and queue magnets
+    
+    Args:
+        client: Pyrogram client
+        message: Message object
+        url: TamilMV topic URL
+        magnet_handler: Handler function for magnet links
+        topic_id: Optional topic ID for tracking incomplete topics
+        
+    Returns:
+        dict with processing results including completion status
+    """
     status_msg = await message.reply("🔄 <b>Scraping TamilMV post...</b>", parse_mode=enums.ParseMode.HTML)
     
     try:
-        # Scrape magnets
-        magnets = tamilmv_scraper.scrape_tamilmv_magnets(url)
+        # Scrape magnets with intelligent tracking
+        scrape_result = tamilmv_scraper.scrape_tamilmv_magnets(url)
+        
+        magnets = scrape_result['magnets']
+        titles_found = scrape_result['titles_found']
+        magnets_found = scrape_result['magnets_found']
+        is_complete = scrape_result['is_complete']
         
         if not magnets:
             await status_msg.edit("❌ <b>No magnets found</b>\n\n<i>The post may not have any magnet links</i>", parse_mode=enums.ParseMode.HTML)
-            return
+            return {
+                'success': False,
+                'added': 0,
+                'skipped': 0,
+                'is_complete': True,  # No magnets = nothing to retry
+                'titles_found': titles_found,
+                'magnets_found': magnets_found
+            }
         
         # Filter by size
         max_size = settings.get_setting("max_file_size")
@@ -27,17 +51,29 @@ async def process_tamilmv_link(client, message, url, magnet_handler):
         from progress import get_readable_file_size
         max_size_str = get_readable_file_size(max_size)
         
-        # Show summary
+        # Show summary with intelligent status
         summary = (
             f"📋 <b>TamilMV Scrape Complete</b>\n\n"
-            f"✅ Found: {len(magnets)} magnets\n"
-            f"🔽 Under {max_size_str}: {len(filtered)} magnets\n\n"
+            f"✅ Found: {magnets_found} magnets\n"
+            f"📝 Post sections: {titles_found}\n"
         )
+        
+        if not is_complete:
+            summary += f"⚠️ <b>Incomplete:</b> Missing magnets detected\n"
+        
+        summary += f"🔽 Under {max_size_str}: {len(filtered)} magnets\n\n"
         
         if not filtered:
             summary += f"❌ <i>No magnets under {max_size_str} limit</i>"
             await status_msg.edit(summary, parse_mode=enums.ParseMode.HTML)
-            return
+            return {
+                'success': False,
+                'added': 0,
+                'skipped': 0,
+                'is_complete': is_complete,
+                'titles_found': titles_found,
+                'magnets_found': magnets_found
+            }
         
         summary += f"<i>Adding {len(filtered)} magnets to queue...</i>"
         await status_msg.edit(summary, parse_mode=enums.ParseMode.HTML)
@@ -89,15 +125,36 @@ async def process_tamilmv_link(client, message, url, magnet_handler):
                 continue
         
         # Final summary
+        status_icon = "✅" if is_complete else "⚠️"
+        completion_note = "" if is_complete else "\n\n⏳ <i>Topic incomplete - will retry later</i>"
+        
         final_summary = (
-            f"✅ <b>Processing Complete!</b>\n\n"
+            f"{status_icon} <b>Processing Complete!</b>\n\n"
             f"📥 Added: {added_count}\n"
             f"⏭️ Skipped (Already Downloaded): {skipped_count}\n"
             f"📊 Check /queue to see progress"
+            f"{completion_note}"
         )
         await status_msg.edit(final_summary, parse_mode=enums.ParseMode.HTML)
+        
+        return {
+            'success': True,
+            'added': added_count,
+            'skipped': skipped_count,
+            'is_complete': is_complete,
+            'titles_found': titles_found,
+            'magnets_found': magnets_found
+        }
         
     except Exception as e:
         logger.error(f"TamilMV processing error: {e}")
         await status_msg.edit(f"❌ <b>Error:</b> {e}", parse_mode=enums.ParseMode.HTML)
+        return {
+            'success': False,
+            'added': 0,
+            'skipped': 0,
+            'is_complete': True,  # Assume complete on error to avoid infinite retry
+            'titles_found': 0,
+            'magnets_found': 0
+        }
 
