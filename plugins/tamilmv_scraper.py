@@ -124,9 +124,15 @@ def scrape_tamilmv_magnets(url):
             titles_found = magnets_found
         
         # Determine if complete: if we found structural titles, check against magnets
-        # If titles_found == magnets_found or magnets >= titles, consider complete
-        # If magnets < titles, it's incomplete
-        is_complete = magnets_found >= titles_found if titles_found > 0 else True
+        # - If no titles AND no magnets found: INCOMPLETE (retry later)
+        # - If titles found but no magnets: INCOMPLETE (waiting for magnets)
+        # - If magnets >= titles: COMPLETE
+        if titles_found == 0 and magnets_found == 0:
+            is_complete = False  # Empty topic - retry
+        elif titles_found > 0 and magnets_found == 0:
+            is_complete = False  # Has posts but no magnets yet
+        else:
+            is_complete = magnets_found >= titles_found
         
         logger.info(f"Found {magnets_found} magnet links, {titles_found} post sections")
         if not is_complete:
