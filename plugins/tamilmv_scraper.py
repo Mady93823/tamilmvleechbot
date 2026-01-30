@@ -67,19 +67,29 @@ def scrape_tamilmv_magnets(url):
         post_content = soup.find('div', class_=re.compile(r'cPost.*ipsType_normal'))
         
         if post_content:
-            # Count heading elements and quality indicators
-            headings = post_content.find_all(['h1', 'h2', 'h3', 'h4', 'strong'])
-            quality_patterns = [r'720p', r'1080p', r'2160p', r'4k', r'predvd', r'dvd', r'web-?dl', 
-                               r'webrip', r'hdtv', r'bluray', r'bd-?rip']
+            # Get all text content to search for size patterns
+            content_text = post_content.get_text()
             
-            for heading in headings:
-                text = heading.get_text().lower()
-                # Check if this heading indicates a release section
-                if any(re.search(pattern, text) for pattern in quality_patterns):
-                    titles_found += 1
-        
-        # If no structured titles found, estimate from magnet link count
-        # (each magnet usually represents a different quality/version)
+            # Count size patterns (indicates separate releases)
+            # Look for patterns like "2.4GB", "1.3GB", "700MB" etc.
+            size_pattern = r'\b\d+(?:\.\d+)?\s?(?:GB|MB)\b'
+            size_matches = re.findall(size_pattern, content_text, re.IGNORECASE)
+            
+            # Count unique sizes (deduplicate)
+            unique_sizes = set(size_matches)
+            titles_found = len(unique_sizes)
+            
+            # Also check headings as fallback
+            if titles_found == 0:
+                headings = post_content.find_all(['h1', 'h2', 'h3', 'h4', 'strong'])
+                quality_patterns = [r'720p', r'1080p', r'2160p', r'4k', r'predvd', r'dvd', r'web-?dl', 
+                                   r'webrip', r'hdtv', r'bluray', r'bd-?rip']
+                
+                for heading in headings:
+                    text = heading.get_text().lower()
+                    # Check if this heading indicates a release section
+                    if any(re.search(pattern, text) for pattern in quality_patterns):
+                        titles_found += 1
         
         # Find all magnet links
         for link in soup.find_all('a', href=True):
