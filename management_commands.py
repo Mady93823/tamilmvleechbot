@@ -15,7 +15,7 @@ from plugins import rss_monitor
 logger = logging.getLogger(__name__)
 
 
-def register_management_commands(app, check_permissions, qb, ACTIVE_TASKS, PENDING_TASKS, MAX_CONCURRENT_DOWNLOADS, DOWNLOAD_DIR, magnet_handler, text_handler):
+def register_management_commands(app, check_permissions, qb, ACTIVE_TASKS, PENDING_TASKS, MAX_CONCURRENT_DOWNLOADS, DOWNLOAD_DIR):
     """Register all management command handlers"""
     
     @app.on_message(filters.command("rebuild"))
@@ -80,24 +80,10 @@ def register_management_commands(app, check_permissions, qb, ACTIVE_TASKS, PENDI
         # Check if it's a magnet link
         if text.startswith("magnet:"):
             await message.reply(
-                "🔄 <b>Retrying magnet link...</b>\n\n"
-                "<i>Processing download</i>",
+                "✅ <b>Magnet link ready for retry</b>\n\n"
+                "<i>Simply send the magnet link again to process it</i>",
                 parse_mode=enums.ParseMode.HTML
             )
-            # Create fake message with magnet text
-            class FakeMagnetMessage:
-                def __init__(self, original_msg, magnet_text):
-                    self.text = magnet_text
-                    self.from_user = original_msg.from_user
-                    self.chat = original_msg.chat
-                    
-                    async def reply(self, *args, **kwargs):
-                        return await original_msg.reply(*args, **kwargs)
-                    
-                    self.reply = reply
-            
-            fake_msg = FakeMagnetMessage(message, text)
-            await magnet_handler(client, fake_msg)
             return
         
         # Check if it's a TamilMV topic URL
@@ -127,26 +113,11 @@ def register_management_commands(app, check_permissions, qb, ACTIVE_TASKS, PENDI
                 rss_monitor.monitor.seen_topics.remove(topic_id)
             
             await message.reply(
-                f"🔄 <b>Retrying topic {topic_id}...</b>\n\n"
+                f"🔄 <b>Topic {topic_id} cleared for retry</b>\n\n"
                 f"<i>Removed from processed history</i>\n"
-                f"<i>Processing topic now</i>",
+                f"<i>Send the topic URL again to process it</i>",
                 parse_mode=enums.ParseMode.HTML
             )
-            
-            # Process the topic URL
-            class FakeMessage:
-                def __init__(self, original_msg, url_text):
-                    self.text = url_text
-                    self.from_user = original_msg.from_user
-                    self.chat = original_msg.chat
-                    
-                    async def reply(self, *args, **kwargs):
-                        return await original_msg.reply(*args, **kwargs)
-                    
-                    self.reply = reply
-            
-            fake_msg = FakeMessage(message, text)
-            await text_handler(client, fake_msg)
             return
         
         # Unknown link type
