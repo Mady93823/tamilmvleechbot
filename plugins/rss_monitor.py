@@ -17,14 +17,14 @@ load_dotenv('config.env')
 logger = logging.getLogger(__name__)
 
 # Config
-DEFAULT_RSS_URL = "https://www.1tamilmv.haus/"
-CHECK_INTERVAL = 900  # 15 minutes
+DEFAULT_RSS_URL = "https://www.1tamilmv.rsvp/"
+CHECK_INTERVAL = 3600  # 1 hour (reduced from 15 min to avoid Telegram rate limits)
 MONGO_URI = os.getenv("MONGO_URI", "")
 DATABASE_NAME = "tamilmv"
 COLLECTION_NAME = "rss_history"
 SETTINGS_COLLECTION = "settings"
 INCOMPLETE_TOPICS_COLLECTION = "incomplete_topics"
-MAX_RETRY_ATTEMPTS = 10
+MAX_RETRY_ATTEMPTS = 5  # Retry incomplete topics up to 5 visits (5 hours with 1-hour intervals)
 
 class RSSMonitor:
     def __init__(self):
@@ -100,9 +100,9 @@ class RSSMonitor:
             return match.group(1)
         return None
 
-    def track_incomplete_topic(self, topic_id, title, url, titles_found, magnets_found):
+    def track_incomplete_topic(self, topic_id, title, url, titles_found, magnets_found, failure_reason="no_magnets"):
         """
-        Track a topic that has incomplete magnet links
+        Track a topic that has incomplete magnet links or failed due to errors
         
         Args:
             topic_id: Topic ID
@@ -110,6 +110,7 @@ class RSSMonitor:
             url: Topic URL
             titles_found: Number of titles/posts found in topic
             magnets_found: Number of magnet links found
+            failure_reason: Reason for tracking - "no_magnets", "storage_full", "network_error"
         """
         if self.incomplete_topics_collection is None:
             return
@@ -121,6 +122,7 @@ class RSSMonitor:
                 "url": url,
                 "titles_found": titles_found,
                 "magnets_found": magnets_found,
+                "failure_reason": failure_reason,
                 "retry_count": 0,
                 "first_seen": time.time(),
                 "last_checked": time.time(),
@@ -133,9 +135,11 @@ class RSSMonitor:
                 upsert=True
             )
             
-            logger.info(f"📝 Tracking incomplete topic {topic_id}: {titles_found} titles, {magnets_found} magnets")
+            reason_emoji = "📝" if failure_reason == "no_magnets" else "💾" if failure_reason == "storage_full" else "🌐"
+            logger.info(f"{reason_emoji} Tracking incomplete topic {topic_id}: {titles_found} titles, {magnets_found} magnets, reason: {failure_reason}")
         except Exception as e:
             logger.error(f"Error tracking incomplete topic: {e}")
+
 
     def update_incomplete_topic(self, topic_id, magnets_found, all_complete=False):
         """

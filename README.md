@@ -135,6 +135,9 @@ Edit `config.env`:
 | `/dirlink <magnet>` | Generate 3-hour direct download link | ❌ |
 | `/getlink [ID]` | Download file by link ID or list active links | ❌ |
 | `/limits` | Check current rate limit status | ✅ |
+| `/rebuild` | **Admin:** Free up space and rebuild bot | ❌ |
+| `/retry <link>` | **Admin:** Manually retry magnet/topic | ❌ |
+| `/stats` | **Admin:** Show system statistics | ✅ |
 
 ---
 
@@ -149,7 +152,7 @@ magnet:?xt=urn:btih:1234567890abcdef...
 ### TamilMV Auto-Scrape
 Send a TamilMV post URL:
 ```
-https://www.1tamilmv.haus/index.php?/forums/topic/12345-movie-name/
+https://www.1tamilmv.rsvp/index.php?/forums/topic/12345-movie-name/
 ```
 Bot will:
 1. Scrape all magnet links
@@ -215,10 +218,12 @@ SimpleLeechBot/
 ├── rate_limiter.py          # Rate tracking & throttling
 ├── auto_delete.py           # Auto-delete utility
 ├── storage_channel.py       # Channel management
+├── storage_utils.py         # Disk space checking
+├── management_commands.py   # Admin commands (/rebuild, /retry, /stats)
 ├── tamilmv_handler.py       # TamilMV integration
 ├── plugins/
 │   ├── tamilmv_scraper.py  # Web scraping
-│   └── rss_monitor.py       # RSS feeds
+│   └── rss_monitor.py       # RSS feeds (1-hour intervals)
 ├── settings.py              # MongoDB settings
 ├── channel_utils.py         # Multi-channel logic
 ├── rename_utils.py          # Filename cleaning

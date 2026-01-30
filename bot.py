@@ -22,6 +22,8 @@ import auto_delete
 import storage_channel
 import caption_utils
 import torrent_search
+import storage_utils
+import management_commands
 from telegraph_helper import telegraph_helper
 
 # Load Config
@@ -220,6 +222,10 @@ async def help_handler(client, message):
         "<i>Perfect for quick sharing without uploading to Telegram</i>\n\n"
         "<b>Monitoring:</b>\n"
         "/limits - Check rate limit status\n\n"
+        "<b>Admin Commands:</b>\n"
+        "/rebuild - Free up space and rebuild bot\n"
+        "/retry <link> - Manually retry magnet/topic\n"
+        "/stats - Show system statistics\n\n"
         "<b>Search & Download:</b>\n"
         "/search <query> - Search torrents (1337x, YTS, etc.)\n"
         "Just send a magnet link or TamilMV post URL!\n\n"
@@ -1123,6 +1129,21 @@ async def process_download(t_hash, message, status_msg):
     stalled_start_time = None
     DEAD_TORRENT_TIMEOUT = 600  # 10 minutes
     
+    # Check disk space before starting (prevent storage full errors)
+    try:
+        has_space, free_bytes = storage_utils.check_disk_space(DOWNLOAD_DIR, required_bytes=2*1024**3)  # Require 2GB free
+        if not has_space:
+            logger.warning(f"⚠️ Low disk space: {storage_utils.get_readable_size(free_bytes)} free")
+            await safe_edit(
+                status_msg,
+                f"⚠️ <b>Low Disk Space Warning</b>\n\n"
+                f"Free: {storage_utils.get_readable_size(free_bytes)}\n"
+                f"<i>Download may fail if storage fills up</i>",
+                parse_mode=enums.ParseMode.HTML
+            )
+    except Exception as e:
+        logger.error(f"Error checking disk space: {e}")
+    
     try:
         while True:
             if IS_SHUTTING_DOWN:
@@ -1654,9 +1675,25 @@ async def rss_worker(client):
                         logger.warning(f"RSS FloodWait: Sleeping for {e.value} seconds")
                         await asyncio.sleep(e.value + 15)
                     except Exception as e:
-                        logger.error(f"RSS Process Error for {topic_title}: {e}")
-                        # On error, mark as processed to avoid infinite loop
-                        rss_monitor.monitor.mark_as_processed(topic_id, topic_title)
+                        error_msg = str(e)
+                        logger.error(f"RSS Process Error for {topic_title}: {error_msg}")
+                        
+                        # Check if this is a storage-related error
+                        if storage_utils.is_storage_full_error(error_msg):
+                            logger.warning(f"💾 Storage full error detected for topic {topic_id}, will retry on next visit")
+                            # Track for retry with storage_full reason
+                            rss_monitor.monitor.track_incomplete_topic(
+                                topic_id, 
+                                topic_title, 
+                                topic_url, 
+                                titles_found=0, 
+                                magnets_found=0,
+                                failure_reason="storage_full"
+                            )
+                        else:
+                            # Permanent error - mark as processed to avoid infinite loop
+                            rss_monitor.monitor.mark_as_processed(topic_id, topic_title)
+                        
                         await asyncio.sleep(5)
             
             # Wait for next check
@@ -1691,6 +1728,13 @@ if __name__ == "__main__":
         # Start HTTP file server
         loop.create_task(direct_link_generator.start_http_server())
         logger.info("Starting HTTP file server...")
+        
+        # Register management commands (/rebuild, /retry, /stats)
+        management_commands.register_management_commands(
+            app, check_permissions, qb, ACTIVE_TASKS, PENDING_TASKS,
+            MAX_CONCURRENT_DOWNLOADS, DOWNLOAD_DIR
+        )
+        logger.info("✅ Registered management commands")
         
         app.run()
     finally:
