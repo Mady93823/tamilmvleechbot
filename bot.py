@@ -393,9 +393,17 @@ async def document_for_dirlink_handler(client, message):
         direct_link_generator.init_directory()
         download_path = os.path.join(direct_link_generator.DIRECT_DOWNLOAD_DIR, filename)
         
-        # Download with progress
+        # Download with progress (throttled to prevent Telegram ban)
+        last_update = [0]  # Use list to allow modification in nested function
+        
         async def download_progress(current, total):
             try:
+                # Throttle updates: only update every 4 seconds
+                current_time = time.time()
+                if current_time - last_update[0] < 4:
+                    return
+                last_update[0] = current_time
+                
                 percent = (current / total) * 100
                 progress_bar = progress.get_progress_bar(percent)
                 await safe_edit(
@@ -601,9 +609,17 @@ async def process_magnet_dirlink(message, magnet_link):
         )
         return
     
-    # Progress callback
+    # Progress callback (throttled to prevent Telegram ban)
+    last_update = [0]  # Use list to allow modification in nested function
+    
     async def progress_callback(progress_percent, state, torrent):
         try:
+            # Throttle updates: only update every 4 seconds
+            current_time = time.time()
+            if current_time - last_update[0] < 4:
+                return
+            last_update[0] = current_time
+            
             from progress import get_readable_file_size, get_readable_time
             
             speed_str = get_readable_file_size(torrent.dlspeed) + "/s"

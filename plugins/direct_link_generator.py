@@ -200,6 +200,9 @@ async def download_from_magnet(qb, magnet_link, status_callback=None):
         
         logger.info(f"Direct Link Download started: {torrent_name}")
         
+        # Throttling for status callback (prevent Telegram ban)
+        last_update = [0]
+        
         # Monitor download progress
         while True:
             torrent = qb.torrents_info(torrent_hashes=torrent_hash)[0]
@@ -207,9 +210,12 @@ async def download_from_magnet(qb, magnet_link, status_callback=None):
             progress = torrent.progress * 100
             state = torrent.state
             
-            # Report progress if callback provided
+            # Report progress if callback provided (throttled)
             if status_callback:
-                await status_callback(progress, state, torrent)
+                current_time = time.time()
+                if current_time - last_update[0] >= 4:  # Update max every 4 seconds
+                    await status_callback(progress, state, torrent)
+                    last_update[0] = current_time
             
             # Check if complete
             if state in ["uploading", "stalledUP", "pausedUP"] or progress >= 100:
