@@ -223,6 +223,7 @@ async def help_handler(client, message):
         "<b>Direct Links:</b>\n"
         "/dirlink - Generate direct download link (send file or magnet)\n"
         "/getlink [ID] - Download file by link ID\n"
+        "/dirlink_files - View and manage stored files\n"
         "<i>Send /dirlink empty to upload a file interactively</i>\n\n"
         "<b>Monitoring:</b>\n"
         "/limits - Check rate limit status\n\n"
@@ -767,7 +768,100 @@ async def getlink_handler(client, message):
     )
 
 
+@app.on_message(filters.command("dirlink_files"))
+async def dirlink_files_handler(client, message):
+    """View and manage direct link files"""
+    if not await check_permissions(message):
+        return
+    
+    try:
+        import os
+        from plugins import direct_link_generator
+        
+        # Get directory info
+        dirlink_dir = direct_link_generator.DIRECT_DOWNLOAD_DIR
+        
+        if not os.path.exists(dirlink_dir):
+            await message.reply(
+                "📭 <b>No Files</b>\n\n"
+                "The directdownloads directory is empty.\n\n"
+                "<i>Generate links with /dirlink to create files</i>",
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+        
+        # List all files and calculate total size
+        files = []
+        total_size = 0
+        
+        for root, dirs, filenames in os.walk(dirlink_dir):
+            for filename in filenames:
+                filepath = os.path.join(root, filename)
+                try:
+                    size = os.path.getsize(filepath)
+                    total_size += size
+                    files.append({
+                        "name": filename,
+                        "path": filepath,
+                        "size": size,
+                        "relative_path": os.path.relpath(filepath, dirlink_dir)
+                    })
+                except:
+                    pass
+        
+        if not files:
+            await message.reply(
+                "📭 <b>No Files</b>\n\n"
+                "The directdownloads directory is empty.\n\n"
+                "<i>Generate links with /dirlink to create files</i>",
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+        
+        # Get active links count
+        active_links_count = len(direct_link_generator.active_links)
+        
+        from progress import get_readable_file_size
+        
+        # Build message
+        msg = (
+            f"📁 <b>Direct Link Files</b>\n\n"
+            f"💾 <b>Total Size:</b> {get_readable_file_size(total_size)}\n"
+            f"📄 <b>Files:</b> {len(files)}\n"
+            f"🔗 <b>Active Links:</b> {active_links_count}\n\n"
+        )
+        
+        # Show files (max 10)
+        msg += "<b>Files:</b>\n"
+        for idx, file in enumerate(files[:10], 1):
+            msg += f"{idx}. {file['name'][:40]}... ({get_readable_file_size(file['size'])})\n"
+        
+        if len(files) > 10:
+            msg += f"\n<i>... and {len(files) - 10} more files</i>\n"
+        
+        msg += (
+            f"\n<i>Files auto-delete after 3 hours when links expire</i>\n"
+            f"<i>Or use the button below to free up storage instantly</i>"
+        )
+        
+        # Add delete all button
+        buttons = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🗑️ Delete All Files", callback_data="delete_all_dirlink_files")
+        ]])
+        
+        await message.reply(msg, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
+        
+    except Exception as e:
+        logger.error(f"Error in dirlink_files_handler: {e}")
+        await message.reply(
+            f"❌ <b>Error</b>\n\n"
+            f"Failed to list files: {str(e)}",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+
 @app.on_message(filters.command("queue"))
+
 async def queue_handler(client, message):
     """Show all active downloads with progress"""
     if not await check_permissions(message):
@@ -935,6 +1029,62 @@ async def callback_handler(client, callback):
         
         await callback.answer("❌ Cancelled", show_alert=False)
         await callback.message.delete()
+        return
+
+    # Handle delete all dirlink files
+    if data == "delete_all_dirlink_files":
+        try:
+            import os
+            import shutil
+            from plugins import direct_link_generator
+            
+            dirlink_dir = direct_link_generator.DIRECT_DOWNLOAD_DIR
+            
+            if not os.path.exists(dirlink_dir):
+                await callback.answer("📭 No files to delete", show_alert=True)
+                return
+            
+            # Count files and size before deletion
+            file_count = 0
+            total_size = 0
+            for root, dirs, files in os.walk(dirlink_dir):
+                file_count += len(files)
+                for f in files:
+                    try:
+                        total_size += os.path.getsize(os.path.join(root, f))
+                    except:
+                        pass
+            
+            if file_count == 0:
+                await callback.answer("📭 No files to delete", show_alert=True)
+                return
+            
+            # Delete directory and recreate
+            shutil.rmtree(dirlink_dir)
+            direct_link_generator.init_directory()
+            
+            # Clear active links
+            direct_link_generator.active_links.clear()
+            
+            from progress import get_readable_file_size
+            
+            await callback.answer(f"✅ Deleted {file_count} files ({get_readable_file_size(total_size)})", show_alert=True)
+            
+            # Update message
+            await callback.message.edit(
+                f"✅ <b>Storage Cleared!</b>\n\n"
+                f"🗑️ <b>Deleted:</b> {file_count} files\n"
+                f"💾 <b>Freed:</b> {get_readable_file_size(total_size)}\n\n"
+                f"<i>All direct link files have been removed</i>",
+                parse_mode=enums.ParseMode.HTML
+            )
+            
+            logger.info(f"Deleted all dirlink files: {file_count} files, {get_readable_file_size(total_size)}")
+            
+        except Exception as e:
+            logger.error(f"Error deleting dirlink files: {e}")
+            await callback.answer(f"❌ Error: {str(e)}", show_alert=True)
+        
         return
 
     

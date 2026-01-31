@@ -24,8 +24,8 @@
 - 📁 **Multi-File Handling** - Automatic folder uploads with natural sorting
 - 📤 **Multi-Channel Upload** - Upload to multiple Telegram channels simultaneously
 - 🌐 **TamilMV Integration** - Auto-scrape and queue magnets from TamilMV posts
-- � **Direct Link Generator** - Create 3-hour shareable download links from magnets
-- �🖼️ **Custom Thumbnails** - Per-user thumbnail support
+- 🔗 **Direct Link Generator** - Create 3-hour shareable download links (magnet + Telegram files)
+- 🖼️ **Custom Thumbnails** - Per-user thumbnail support
 - 📏 **Smart Size Filtering** - 2GB/4GB configurable limits
 - 🗑️ **Auto-Cleanup** - Files deleted immediately after upload
 
@@ -132,8 +132,11 @@ Edit `config.env`:
 | `/setchannels` | Configure upload channels<br>`/setchannels -1001234567 \| -1009876543` | ❌ |
 | `/setstorage` | Set storage channel (safer mode) | ✅ |
 | `/search <query>` | Search torrents from multiple sites | ❌ |
-| `/dirlink <magnet>` | Generate 3-hour direct download link | ❌ |
+| `/dirlink`  | Generate 3-hour direct download link (magnet or file) | ❌ |
+| `/dirlink <magnet>` | Generate link from magnet | ❌ |
+| `/dirlink` (empty) | Upload file interactively for link generation | ❌ |
 | `/getlink [ID]` | Download file by link ID or list active links | ❌ |
+| `/dirlink_files` | View and manage stored dirlink files with delete option | ❌ |
 | `/limits` | Check current rate limit status | ✅ |
 | `/rebuild` | **Admin:** Free up space and rebuild bot | ❌ |
 | `/retry <link>` | **Admin:** Manually retry magnet/topic | ❌ |
@@ -162,19 +165,30 @@ Bot will:
 
 ### Direct Link Generator
 Create shareable download links without uploading to Telegram:
+
+**From Magnet:**
 ```
 /dirlink magnet:?xt=urn:btih:1234567890abcdef...
 ```
+
+**From Telegram File:**
+```
+/dirlink          # Bot prompts for file
+<send file>       # Upload document/video
+```
+
 The bot will:
 1. Download the file to `directdownloads/` directory
 2. Generate a unique link ID
-3. Provide a 3-hour valid link
+3. Provide a 3-hour valid HTTPS link (via Tailscale)
 4. Auto-delete file after expiration
 
-To download:
+To manage:
 ```
-/getlink [ID]  # Download specific file
-/getlink       # List all active links
+/getlink [ID]     # Download specific file
+/getlink          # List all active links
+/dirlink_files    # View all files + storage stats
+                  # Click "Delete All" to free storage instantly
 ```
 
 ### Torrent Search
