@@ -14,4 +14,6 @@ services:
       - ./downloads:/app/downloads
       - ./settings.json:/app/settings.json
     ports:
-      - "8090:8090" # Expose WebUI if needed (Tailscale)
+      - "8090:8090"  # qBittorrent WebUI
+      - "8091:8091"  # Direct link HTTP server
+ # Expose WebUI if needed (Tailscale)
