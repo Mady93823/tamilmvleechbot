@@ -54,6 +54,10 @@ PENDING_TASKS = []
 # Search results cache: {user_id: [list of torrent dicts]}
 SEARCH_RESULTS_CACHE = {}
 
+# Direct link file upload state: {user_id: {"awaiting_file": True, "prompt_message_id": int, "chat_id": int}}
+DIRLINK_AWAITING_FILE = {}
+
+
 # --- qBittorrent Client ---
 # --- qBittorrent Client ---
 def connect_qb():
@@ -217,9 +221,9 @@ async def help_handler(client, message):
         "/setstorage - Set storage channel (safer)\n"
         "<i>Example: /setchannels -1001234567 | -1009876543</i>\n\n"
         "<b>Direct Links:</b>\n"
-        "/dirlink <magnet> - Generate 3-hour direct download link\n"
+        "/dirlink - Generate direct download link (send file or magnet)\n"
         "/getlink [ID] - Download file by link ID\n"
-        "<i>Perfect for quick sharing without uploading to Telegram</i>\n\n"
+        "<i>Send /dirlink empty to upload a file interactively</i>\n\n"
         "<b>Monitoring:</b>\n"
         "/limits - Check rate limit status\n\n"
         "<b>Admin Commands:</b>\n"
@@ -345,7 +349,117 @@ async def forwarded_message_handler(client, message):
         )
 
 
+@app.on_message((filters.document | filters.video) & filters.private)
+async def document_for_dirlink_handler(client, message):
+    """Handle documents/videos sent for direct link generation"""
+    if not await check_permissions(message):
+        return
+    
+    user_id = message.from_user.id
+    
+    # Check if user is awaiting file for dirlink
+    if user_id not in DIRLINK_AWAITING_FILE:
+        return  # Not awaiting file, ignore
+    
+    # Clear state
+    state = DIRLINK_AWAITING_FILE.pop(user_id)
+    
+    # Delete prompt message if it exists
+    try:
+        await client.delete_messages(state["chat_id"], state["prompt_message_id"])
+    except:
+        pass
+    
+    # Get file info
+    doc = message.document or message.video
+    filename = doc.file_name or f"file_{doc.file_id}"
+    file_size = doc.file_size
+    
+    # Create status message
+    status_msg = await message.reply(
+        "🔗 <b>Direct Link Generator</b>\n\n"
+        f"📁 <b>File:</b> {filename}\n"
+        f"💾 <b>Size:</b> {progress.get_readable_file_size(file_size)}\n\n"
+        "⏬ Downloading from Telegram...\n"
+        "<i>Please wait...</i>",
+        parse_mode=enums.ParseMode.HTML
+    )
+    
+    try:
+        # Download file from Telegram to directdownloads
+        import os
+        from plugins import direct_link_generator
+        
+        direct_link_generator.init_directory()
+        download_path = os.path.join(direct_link_generator.DIRECT_DOWNLOAD_DIR, filename)
+        
+        # Download with progress
+        async def download_progress(current, total):
+            try:
+                percent = (current / total) * 100
+                progress_bar = progress.get_progress_bar(percent)
+                await safe_edit(
+                    status_msg,
+                    f"🔗 <b>Direct Link Generator</b>\n\n"
+                    f"📁 <b>File:</b> {filename[:50]}...\n"
+                    f"💾 <b>Size:</b> {progress.get_readable_file_size(total)}\n\n"
+                    f"{progress_bar} {percent:.1f}%\n"
+                    f"📥 {progress.get_readable_file_size(current)} / {progress.get_readable_file_size(total)}\n\n"
+                    f"⏬ Downloading from Telegram...",
+                    parse_mode=enums.ParseMode.HTML
+                )
+            except:
+                pass
+        
+        downloaded_path = await message.download(
+            file_name=download_path,
+            progress=download_progress
+        )
+        
+        # Generate link ID
+        link_id = direct_link_generator.generate_link_id(filename + str(file_size))
+        
+        # Add to active links
+        direct_link_generator.add_active_link(
+            link_id,
+            downloaded_path,
+            filename,
+            file_size
+        )
+        
+        # Generate download info
+        from datetime import datetime, timedelta
+        expires_at = datetime.now() + timedelta(hours=direct_link_generator.LINK_EXPIRY_HOURS)
+        
+        await safe_edit(
+            status_msg,
+            f"✅ <b>Direct Link Generated!</b>\n\n"
+            f"📁 <b>File:</b> {filename[:50]}...\n"
+            f"💾 <b>Size:</b> {progress.get_readable_file_size(file_size)}\n"
+            f"🔗 <b>Link ID:</b> <code>{link_id}</code>\n\n"
+            f"⏰ <b>Expires:</b> {expires_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"⏳ <b>Valid for:</b> {direct_link_generator.LINK_EXPIRY_HOURS} hours\n\n"
+            f"<b>📥 To download:</b>\n"
+            f"Send <code>/getlink {link_id}</code>\n\n"
+            f"<i>File will be auto-deleted after expiry</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+        
+        logger.info(f"Direct link created from Telegram file: {link_id} - {filename}")
+        
+    except Exception as e:
+        logger.error(f"Error creating direct link from file: {e}")
+        await safe_edit(
+            status_msg,
+            f"❌ <b>Error</b>\n\n"
+            f"Failed to create direct link: {str(e)}\n\n"
+            f"<i>Please try again</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+
 @app.on_message(filters.command("search"))
+
 async def search_handler(client, message):
     """Search torrents from multiple sources with site selection"""
     if not await check_permissions(message):
@@ -396,22 +510,64 @@ async def search_handler(client, message):
 
 @app.on_message(filters.command("dirlink"))
 async def dirlink_handler(client, message):
-    """Generate direct download link from magnet"""
+    """Generate direct download link from magnet or Telegram file"""
     if not await check_permissions(message):
         return
     
-    # Extract magnet link
-    magnet_link = message.text.replace("/dirlink", "").strip()
+    user_id = message.from_user.id
     
-    if not magnet_link or not magnet_link.startswith("magnet:?xt=urn:btih:"):
-        await message.reply(
-            "❌ <b>Invalid magnet link</b>\n\n"
-            "<b>Usage:</b> /dirlink magnet:?xt=urn:btih:...\n\n"
-            "<i>Paste the magnet link after the command</i>",
+    # Extract argument
+    arg = message.text.replace("/dirlink", "").strip()
+    
+    # Case 1: Empty command - ask for file
+    if not arg:
+        # Show prompt with cancel button
+        buttons = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✖️ Cancel", callback_data="cancel_dirlink")
+        ]])
+        
+        prompt_msg = await message.reply(
+            "📤 <b>Send me a file to generate direct link</b>\n\n"
+            "You can send:\n"
+            "• 📄 Any document/video file\n"
+            "• 🔗 Or use: /dirlink <magnet_link>\n\n"
+            "<i>Waiting for your file...</i>",
+            reply_markup=buttons,
             parse_mode=enums.ParseMode.HTML
         )
+        
+        # Track state
+        DIRLINK_AWAITING_FILE[user_id] = {
+            "awaiting_file": True,
+            "prompt_message_id": prompt_msg.id,
+            "chat_id": message.chat.id
+        }
+        
+        # Auto-delete prompt after delay
+        delay = settings.get_setting("auto_delete_delay")
+        if delay > 0:
+            asyncio.create_task(auto_delete.auto_delete_message(prompt_msg, delay))
+        
         return
     
+    # Case 2: Magnet link
+    if arg.startswith("magnet:?xt=urn:btih:"):
+        await process_magnet_dirlink(message, arg)
+        return
+    
+    # Case 3: Invalid input
+    await message.reply(
+        "❌ <b>Invalid input</b>\n\n"
+        "<b>Usage:</b>\n"
+        "• /dirlink - Send file interactively\n"
+        "• /dirlink magnet:?xt=urn:btih:...\n\n"
+        "<i>Send empty /dirlink and I'll ask for a file</i>",
+        parse_mode=enums.ParseMode.HTML
+    )
+
+
+async def process_magnet_dirlink(message, magnet_link):
+    """Process magnet link for direct link generation"""
     # Create status message
     status_msg = await message.reply(
         "🔗 <b>Direct Link Generator</b>\n\n"
@@ -515,6 +671,7 @@ async def dirlink_handler(client, message):
     )
     
     logger.info(f"Direct link created: {link_id} - {result['filename']}")
+
 
 
 @app.on_message(filters.command("getlink"))
@@ -751,6 +908,19 @@ async def callback_handler(client, callback):
     if data == "close":
         await callback.message.delete()
         return
+    
+    # Handle dirlink cancel
+    if data == "cancel_dirlink":
+        user_id = callback.from_user.id
+        
+        # Clear state if exists
+        if user_id in DIRLINK_AWAITING_FILE:
+            DIRLINK_AWAITING_FILE.pop(user_id)
+        
+        await callback.answer("❌ Cancelled", show_alert=False)
+        await callback.message.delete()
+        return
+
     
     # Handle torrent selection from search results
     if data.startswith("torrent_select:"):

@@ -46,22 +46,13 @@ def generate_link_id(magnet_link):
     return hash_obj.hexdigest()[:12]
 
 def get_server_ip():
-    """Get public IP or hostname for download URLs"""
-    # Priority 1: Use BASE_URL from environment (for Tailscale, Cloudflare Tunnel, etc.)
-    base_url = os.getenv("BASE_URL")
-    if base_url:
-        # Remove http:// or https:// if present
-        base_url = base_url.replace("http://", "").replace("https://", "")
-        # Remove trailing slash
-        base_url = base_url.rstrip("/")
-        return base_url
-    
-    # Priority 2: Use PUBLIC_IP from environment
+    """Get public IP or hostname for download URLs (internal use only)"""
+    # Priority 1: Use PUBLIC_IP from environment
     public_ip = os.getenv("PUBLIC_IP")
     if public_ip:
         return public_ip
     
-    # Priority 3: Try to get hostname
+    # Priority 2: Try to get hostname
     try:
         hostname = socket.gethostname()
         return hostname
@@ -70,13 +61,33 @@ def get_server_ip():
 
 def get_download_url(link_id, filename=None):
     """Generate download URL for the file"""
-    server_ip = get_server_ip()
+    base_url = os.getenv("BASE_URL", "").strip()
+    
+    # Construct the path part
     if filename:
-        # URL encode filename for safety
         import urllib.parse
         safe_filename = urllib.parse.quote(filename)
-        return f"http://{server_ip}:{HTTP_PORT}/download/{link_id}/{safe_filename}"
-    return f"http://{server_ip}:{HTTP_PORT}/download/{link_id}"
+        path = f"/download/{link_id}/{safe_filename}"
+    else:
+        path = f"/download/{link_id}"
+    
+    # If BASE_URL is provided and has protocol
+    if base_url:
+        # Remove trailing slash
+        base_url = base_url.rstrip("/")
+        
+        # Check if BASE_URL already has protocol
+        if base_url.startswith("http://") or base_url.startswith("https://"):
+            # Use BASE_URL as-is (for Tailscale HTTPS or configured HTTP)
+            # Don't append port - assume it's already in BASE_URL or handled by proxy
+            return f"{base_url}{path}"
+        else:
+            # No protocol specified - add http:// and port (legacy behavior)
+            return f"http://{base_url}:{HTTP_PORT}{path}"
+    
+    # Fallback: auto-detect server IP and use HTTP with port
+    server_ip = get_server_ip()
+    return f"http://{server_ip}:{HTTP_PORT}{path}"
 
 def add_active_link(link_id, file_path, filename, size):
     """Register a new active download link"""
@@ -272,71 +283,86 @@ def get_active_links_info():
 # HTTP Server handlers
 async def handle_download(request):
     """Handle file download requests"""
-    link_id = request.match_info.get('link_id')
-    
-    # Validate link
-    if not is_link_valid(link_id):
-        return web.Response(text="404 - Link not found or expired", status=404)
-    
-    link_info = get_link_info(link_id)
-    file_path = link_info["file_path"]
-    filename = link_info["filename"]
-    
-    # Check if file exists
-    if not os.path.exists(file_path):
-        return web.Response(text="404 - File not found", status=404)
-    
-    # Serve file
-    if os.path.isfile(file_path):
-        # Single file
-        return web.FileResponse(
-            file_path,
-            headers={
-                'Content-Disposition': f'attachment; filename="{filename}"'
-            }
-        )
-    else:
-        # Directory - create ZIP on the fly
-        import zipfile
-        import tempfile
+    try:
+        link_id = request.match_info.get('link_id')
+        logger.info(f"📥 Download request received for link_id: {link_id}")
         
-        # Create temporary ZIP file
-        zip_fd, zip_path = tempfile.mkstemp(suffix='.zip')
-        os.close(zip_fd)
+        # Validate link
+        if not is_link_valid(link_id):
+            logger.warning(f"❌ Invalid or expired link: {link_id}")
+            return web.Response(text="404 - Link not found or expired", status=404)
         
-        try:
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for root, dirs, files in os.walk(file_path):
-                    for file in files:
-                        file_full_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_full_path, file_path)
-                        zipf.write(file_full_path, arcname)
-            
-            # Serve ZIP file
-            response = web.FileResponse(
-                zip_path,
+        link_info = get_link_info(link_id)
+        file_path = link_info["file_path"]
+        filename = link_info["filename"]
+        
+        logger.info(f"📁 Serving file: {filename}")
+        logger.debug(f"File path: {file_path}")
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            logger.error(f"❌ File not found on disk: {file_path}")
+            return web.Response(text="404 - File not found", status=404)
+        
+        # Serve file
+        if os.path.isfile(file_path):
+            # Single file
+            logger.info(f"✅ Serving single file: {filename}")
+            return web.FileResponse(
+                file_path,
                 headers={
-                    'Content-Disposition': f'attachment; filename="{filename}.zip"'
+                    'Content-Disposition': f'attachment; filename="{filename}"'
                 }
             )
+        else:
+            # Directory - create ZIP on the fly
+            logger.info(f"📦 Creating ZIP archive for directory: {filename}")
+            import zipfile
+            import tempfile
             
-            # Delete temp file after response
-            async def cleanup_temp():
-                await asyncio.sleep(5)
-                try:
+            # Create temporary ZIP file
+            zip_fd, zip_path = tempfile.mkstemp(suffix='.zip')
+            os.close(zip_fd)
+            
+            try:
+                with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    for root, dirs, files in os.walk(file_path):
+                        for file in files:
+                            file_full_path = os.path.join(root, file)
+                            arcname = os.path.relpath(file_full_path, file_path)
+                            zipf.write(file_full_path, arcname)
+                
+                logger.info(f"✅ ZIP archive created successfully")
+                
+                # Serve ZIP file
+                response = web.FileResponse(
+                    zip_path,
+                    headers={
+                        'Content-Disposition': f'attachment; filename="{filename}.zip"'
+                    }
+                )
+                
+                # Delete temp file after response
+                async def cleanup_temp():
+                    await asyncio.sleep(5)
+                    try:
+                        os.remove(zip_path)
+                    except:
+                        pass
+                
+                asyncio.create_task(cleanup_temp())
+                
+                return response
+            
+            except Exception as e:
+                logger.error(f"❌ Error creating ZIP: {e}", exc_info=True)
+                if os.path.exists(zip_path):
                     os.remove(zip_path)
-                except:
-                    pass
-            
-            asyncio.create_task(cleanup_temp())
-            
-            return response
-        
-        except Exception as e:
-            logger.error(f"Error creating ZIP: {e}")
-            if os.path.exists(zip_path):
-                os.remove(zip_path)
-            return web.Response(text="500 - Error creating archive", status=500)
+                return web.Response(text="500 - Error creating archive", status=500)
+    
+    except Exception as e:
+        logger.error(f"❌ Unexpected error in handle_download: {e}", exc_info=True)
+        return web.Response(text=f"500 - Internal Server Error", status=500)
 
 async def handle_info(request):
     """Show information about all active links"""
