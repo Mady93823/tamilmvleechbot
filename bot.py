@@ -2051,26 +2051,22 @@ if __name__ == "__main__":
             
     with open(PID_FILE, "w") as f:
         f.write(str(os.getpid()))
+    
+    # Register management commands (/rebuild, /retry, /stats) BEFORE starting the app
+    # This must be done before app.run() to ensure handlers are registered
+    management_commands.register_management_commands(
+        app, check_permissions, qb, ACTIVE_TASKS, PENDING_TASKS,
+        MAX_CONCURRENT_DOWNLOADS, DOWNLOAD_DIR
+    )
+    logger.info("✅ Registered management commands")
         
     try:
-        # Start RSS worker on startup
+        # Start background tasks
         loop = asyncio.get_event_loop()
         loop.create_task(rss_worker(app))
-        
-        # Start direct link cleanup worker
         loop.create_task(direct_link_generator.cleanup_worker())
-        logger.info("Started direct link cleanup worker")
-        
-        # Start HTTP file server
         loop.create_task(direct_link_generator.start_http_server())
-        logger.info("Starting HTTP file server...")
-        
-        # Register management commands (/rebuild, /retry, /stats)
-        management_commands.register_management_commands(
-            app, check_permissions, qb, ACTIVE_TASKS, PENDING_TASKS,
-            MAX_CONCURRENT_DOWNLOADS, DOWNLOAD_DIR
-        )
-        logger.info("✅ Registered management commands")
+        logger.info("Started background workers")
         
         app.run()
     finally:
